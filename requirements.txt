@@ -1,0 +1,13 @@
+# The demo needs NONE of these. `python3 -m backend.server 8000` runs on the
+# standard library alone, which is deliberate: no install step and no network
+# dependency during a live demo.
+#
+# Install these only for the FastAPI entry point or the Supabase store.
+
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-dotenv>=1.0
+
+# Supabase / PostgreSQL store (backend/repository/supabase_repo.py)
+psycopg[binary]>=3.1
+supabase>=2.4
