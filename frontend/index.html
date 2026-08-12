@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BRAHMO Rules Engine — BFS + 5-Check Filter</title>
+<style>
+:root{
+  --ink:#0D1B1A; --ink-2:#16302D; --paper:#FFFFFF; --wash:#F4F7F6;
+  --rule:#D7E2DF; --rule-2:#B9C9C5;
+  --pass:#0E7C66; --pass-soft:#D6EDE7;
+  --cut:#9B2C3F; --cut-soft:#F3DCE0;
+  --zone2:#B08308; --zone2-soft:#F7EDD2;
+  --muted:#5E7370;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--wash);color:var(--ink);font-family:var(--sans);
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1280px;margin:0 auto;padding:0 20px 64px}
+
+/* ---------- header ---------- */
+header{background:var(--ink);color:#EAF2F0;padding:18px 0 16px;margin-bottom:20px}
+header .wrap{display:flex;flex-wrap:wrap;gap:16px;align-items:baseline;
+  justify-content:space-between;padding-bottom:0}
+h1{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;margin:0}
+h1 span{color:#6FBFAA}
+.tagline{font-size:12px;color:#8FA8A4;margin:4px 0 0;font-family:var(--mono);
+  letter-spacing:.04em}
+.badges{display:flex;gap:8px;flex-wrap:wrap}
+.badge{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;border:1px solid #2E4B47;color:#9CC7BE;
+  padding:4px 9px;border-radius:2px}
+.badge.hot{border-color:#6FBFAA;color:#B7E4D8}
+
+/* ---------- panels ---------- */
+.panel{background:var(--paper);border:1px solid var(--rule);border-radius:3px;
+  margin-bottom:16px}
+.panel-hd{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:11px 16px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.panel-hd h2{font-family:var(--mono);font-size:11px;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;margin:0;color:var(--muted)}
+.panel-bd{padding:16px}
+
+/* ---------- controls ---------- */
+.controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:5px}
+label{font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted)}
+select,input[type=text],input[type=number]{font-family:var(--mono);font-size:13px;
+  padding:8px 10px;border:1px solid var(--rule-2);border-radius:2px;
+  background:var(--paper);color:var(--ink);min-width:78px}
+select{min-width:230px}
+select:focus-visible,input:focus-visible,button:focus-visible{outline:2px solid var(--pass);
+  outline-offset:2px}
+button{font-family:var(--mono);font-size:12px;letter-spacing:.1em;
+  text-transform:uppercase;padding:9px 18px;border-radius:2px;cursor:pointer;
+  border:1px solid var(--ink);background:var(--ink);color:#fff;font-weight:600}
+button:hover{background:var(--ink-2)}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--rule-2)}
+button.ghost:hover{background:var(--wash)}
+button.ghost[aria-pressed=true]{background:var(--pass);border-color:var(--pass);
+  color:#fff}
+.hint{font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+/* ---------- profile strip ---------- */
+.profile{display:flex;gap:0;flex-wrap:wrap;border-top:1px solid var(--rule);
+  margin-top:14px;padding-top:12px}
+.pcell{padding-right:26px;margin-right:26px;border-right:1px solid var(--rule)}
+.pcell:last-child{border-right:0}
+.pcell b{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);font-weight:500}
+.pcell span{font-family:var(--mono);font-size:14px}
+
+/* ---------- THE SIEVE (signature) ---------- */
+.sieve{display:flex;flex-direction:column;gap:3px}
+.stage{display:grid;grid-template-columns:132px 1fr 96px;gap:12px;
+  align-items:center}
+.stage .nm{font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);text-align:right}
+.stage.on .nm{color:var(--ink);font-weight:600}
+.track{position:relative;height:30px;background:repeating-linear-gradient(
+    135deg,transparent,transparent 4px,var(--cut-soft) 4px,var(--cut-soft) 8px);
+  border:1px solid var(--rule);border-radius:2px;overflow:hidden}
+.fill{position:absolute;inset:0 auto 0 0;background:var(--pass-soft);
+  border-right:2px solid var(--pass);width:0;
+  transition:width .45s cubic-bezier(.3,.8,.35,1)}
+.stage.entry .fill{background:#E4EAE9;border-right-color:var(--rule-2)}
+.stage.z2 .fill{background:var(--zone2-soft);border-right-color:var(--zone2)}
+.track .cnt{position:absolute;left:9px;top:50%;transform:translateY(-50%);
+  font-family:var(--mono);font-size:13px;font-weight:600;z-index:2}
+.delta{font-family:var(--mono);font-size:12px;color:var(--cut);text-align:left}
+.delta.zero{color:var(--rule-2)}
+.delta.gain{color:var(--zone2)}
+@media (prefers-reduced-motion:reduce){.fill{transition:none}}
+
+/* ---------- split ---------- */
+.split{display:grid;grid-template-columns:minmax(300px,1fr) minmax(420px,1.5fr);
+  gap:16px;align-items:start}
+@media(max-width:940px){.split{grid-template-columns:1fr}}
+
+/* ---------- DAG ---------- */
+.dag{font-family:var(--mono);font-size:12px;max-height:430px;overflow:auto}
+.dnode{display:flex;align-items:center;gap:7px;padding:3px 0;color:var(--rule-2)}
+.dnode.reach{color:var(--ink)}
+.dnode .dot{width:8px;height:8px;border-radius:50%;flex:none;
+  border:1px solid var(--rule-2);background:transparent}
+.dnode.reach .dot{background:var(--pass);border-color:var(--pass)}
+.dnode.entry .dot{background:var(--ink);border-color:var(--ink);
+  box-shadow:0 0 0 3px var(--pass-soft)}
+.dnode.g2 .dot{background:var(--zone2);border-color:var(--zone2);
+  border-radius:1px;transform:rotate(45deg)}
+.dnode .lv{color:var(--muted);font-size:10px;min-width:26px}
+.dnode .you{background:var(--ink);color:#fff;font-size:9px;letter-spacing:.1em;
+  padding:1px 5px;border-radius:2px}
+
+/* ---------- candidate table ---------- */
+.cand{max-height:430px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);text-align:left;font-weight:500;
+  padding:0 8px 7px;border-bottom:1px solid var(--rule);position:sticky;top:0;
+  background:var(--paper)}
+td{padding:7px 8px;border-bottom:1px solid var(--wash);vertical-align:top}
+td.id{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;padding:2px 5px;
+  border-radius:2px;white-space:nowrap;display:inline-block}
+.t-CONSTRAINT{background:var(--cut-soft);color:var(--cut)}
+.t-DECISION{background:var(--pass-soft);color:var(--pass)}
+.t-ANTI_PATTERN{background:#FBE8D8;color:#9A4A12}
+.t-FACT{background:#E6ECF4;color:#3A5578}
+.src{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;color:var(--muted)}
+.src.z{color:var(--zone2);font-weight:600}
+.num{font-family:var(--mono);font-size:11.5px;text-align:right;white-space:nowrap}
+.grp{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);padding-top:12px}
+
+/* ---------- compare ---------- */
+.cmp{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:0;
+  border:1px solid var(--rule);border-radius:2px;overflow:hidden}
+.col{border-right:1px solid var(--rule)}
+.col:last-child{border-right:0}
+.col h3{margin:0;padding:11px 14px 3px;font-family:var(--mono);font-size:12.5px}
+.col .meta{padding:0 14px 11px;font-family:var(--mono);font-size:10.5px;
+  color:var(--muted);letter-spacing:.04em;border-bottom:1px solid var(--rule)}
+.big{padding:14px;text-align:center;border-bottom:1px solid var(--rule)}
+.big b{display:block;font-family:var(--mono);font-size:34px;line-height:1;
+  font-weight:600}
+.big span{font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted)}
+.rows{padding:6px 14px 14px;font-family:var(--mono);font-size:11.5px}
+.rw{display:flex;justify-content:space-between;padding:3px 0;
+  border-bottom:1px solid var(--wash)}
+.rw span:last-child{color:var(--muted)}
+.yes{color:var(--pass);font-weight:600}
+.no{color:var(--cut)}
+
+.timing{font-family:var(--mono);font-size:11px;color:var(--muted);
+  display:flex;gap:16px;flex-wrap:wrap}
+.timing b{color:var(--ink);font-weight:600}
+.note{font-family:var(--mono);font-size:11px;color:var(--muted);
+  border-left:2px solid var(--rule-2);padding:3px 0 3px 10px;margin:5px 0}
+details summary{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);cursor:pointer;padding:4px 0}
+.adhoc{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;
+  padding-top:10px}
+.err{color:var(--cut);font-family:var(--mono);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div>
+      <h1>BRAHMO <span>/</span> Rules Engine</h1>
+      <p class="tagline">BFS traversal &rarr; Zone 2 injection &rarr; 5 sequential checks &rarr; candidate set</p>
+    </div>
+    <div class="badges">
+      <span class="badge hot" id="b-llm">0 LLM calls</span>
+      <span class="badge" id="b-nodes">— nodes</span>
+      <span class="badge" id="b-dag">DAG verified</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- controls -->
+  <section class="panel">
+    <div class="panel-bd">
+      <div class="controls">
+        <div class="field">
+          <label for="user">Session user</label>
+          <select id="user"></select>
+        </div>
+        <div class="field">
+          <label for="mode">Permission mode</label>
+          <select id="mode" style="min-width:150px">
+            <option value="strict">strict</option>
+            <option value="scope_aware">scope_aware</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="thr">Derivability</label>
+          <input type="number" id="thr" value="0.7" min="0" max="1" step="0.05">
+        </div>
+        <div class="field">
+          <label for="z2">Zone 2 injection</label>
+          <button class="ghost" id="z2" aria-pressed="true">On</button>
+        </div>
+        <button id="run">Run pipeline</button>
+        <span class="hint" id="status"></span>
+      </div>
+
+      <div class="profile" id="profile"></div>
+
+      <details>
+        <summary>Test an unseen profile</summary>
+        <div class="adhoc">
+          <div class="field"><label for="a-name">Name</label>
+            <input type="text" id="a-name" value="External Auditor" style="min-width:160px"></div>
+          <div class="field"><label for="a-role">Role</label>
+            <select id="a-role" style="min-width:130px">
+              <option>VIEWER</option><option>EDITOR</option><option>HOD</option>
+              <option>QUALITY</option><option selected>AUDITOR</option><option>ADMIN</option>
+            </select></div>
+          <div class="field"><label for="a-dept">Department</label>
+            <input type="text" id="a-dept" value="audit" style="min-width:120px"></div>
+          <div class="field"><label for="a-ceil">Ceiling</label>
+            <input type="number" id="a-ceil" value="3" min="1" max="15"></div>
+          <div class="field"><label for="a-clr">Clearance</label>
+            <input type="text" id="a-clr" placeholder="MNPI,PHI" style="min-width:130px"></div>
+          <button class="ghost" id="a-run">Run this profile</button>
+        </div>
+        <p class="hint" style="margin:8px 0 0">Nothing is written to the database. The
+          profile is built at request time and pushed through the same pipeline.</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- sieve -->
+  <section class="panel">
+    <div class="panel-hd">
+      <h2>The sieve — where every node was lost</h2>
+      <div class="timing" id="timing"></div>
+    </div>
+    <div class="panel-bd">
+      <div class="sieve" id="sieve"></div>
+      <div id="notes" style="margin-top:14px"></div>
+    </div>
+  </section>
+
+  <!-- split -->
+  <div class="split">
+    <section class="panel">
+      <div class="panel-hd"><h2>Hierarchy DAG</h2>
+        <span class="hint" id="dag-count"></span></div>
+      <div class="panel-bd dag" id="dag"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-hd"><h2>Candidate set</h2>
+        <span class="hint" id="cand-count"></span></div>
+      <div class="panel-bd cand" id="cand"></div>
+    </section>
+  </div>
+
+  <!-- compare -->
+  <section class="panel">
+    <div class="panel-hd">
+      <h2>Same graph, different people</h2>
+      <button class="ghost" id="cmp-run">Compare all seven</button>
+    </div>
+    <div class="panel-bd"><div class="cmp" id="cmp"></div></div>
+  </section>
+
+</div>
+
+<script>
+const API = "";
+const $  = s => document.querySelector(s);
+const el = (t,c,x) => { const n=document.createElement(t);
+  if(c) n.className=c; if(x!=null) n.textContent=x; return n; };
+
+let USERS=[], HIER=[], LAST=null, Z2=true;
+
+const STAGES = [
+  ["after_bfs",          "BFS reach",     "entry"],
+  ["after_zone2",        "+ Zone 2",      "z2"],
+  ["after_isolation",    "1 Isolation",   ""],
+  ["after_compliance",   "2 Compliance",  ""],
+  ["after_permission",   "3 Permission",  ""],
+  ["after_temporal",     "4 Temporal",    ""],
+  ["after_derivability", "5 Derivability",""],
+];
+
+async function get(path){
+  const r = await fetch(API+path);
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return r.json();
+}
+
+async function boot(){
+  try{
+    const [h,u,hier] = await Promise.all([
+      get("/health"), get("/api/users"), get("/api/hierarchy")]);
+    USERS=u; HIER=hier;
+    $("#b-nodes").textContent = h.nodes+" nodes";
+    $("#b-dag").textContent   = h.graph_acyclic ? "DAG verified" : "CYCLE FOUND";
+    const sel=$("#user");
+    u.forEach(x=>{
+      const o=el("option",null,`${x.name} — ${x.role}, L${x.ceiling_level}, ${x.department}`);
+      o.value=x.id; sel.appendChild(o);
+    });
+    sel.value="U-PRIYA";
+    drawDAG(null,null);
+    run();
+  }catch(e){ $("#status").innerHTML='<span class="err">Backend not reachable — start it with: python3 -m backend.server 8000</span>'; }
+}
+
+function qs(){
+  return `&zone2=${Z2}&threshold=${$("#thr").value||0.7}&mode=${$("#mode").value}`;
+}
+
+async function run(){
+  $("#status").textContent="running…";
+  try{
+    LAST = await get("/api/pipeline?user="+encodeURIComponent($("#user").value)+qs());
+    render(LAST);
+  }catch(e){ $("#status").innerHTML='<span class="err">'+e.message+'</span>'; }
+}
+
+async function runAdhoc(){
+  const p = new URLSearchParams({
+    role:$("#a-role").value, department:$("#a-dept").value.trim()||"ortho",
+    ceiling:$("#a-ceil").value||10, name:$("#a-name").value.trim()||"Ad-hoc User",
+    clearance:$("#a-clr").value.trim(), id:"U-ADHOC"
+  });
+  $("#status").textContent="running unseen profile…";
+  try{
+    LAST = await get("/api/pipeline?"+p.toString()+qs());
+    render(LAST);
+  }catch(e){ $("#status").innerHTML='<span class="err">'+e.message+'</span>'; }
+}
+
+function render(d){
+  $("#status").textContent="";
+
+  // profile strip
+  const pr=$("#profile"); pr.innerHTML="";
+  [["User",d.user_name],["Role",d.role],["Ceiling","L"+d.ceiling_level],
+   ["Department",d.department],["Entry point",d.entry_point_name+" ("+d.entry_point+")"]]
+   .forEach(([k,v])=>{ const c=el("div","pcell"); c.appendChild(el("b",null,k));
+     c.appendChild(el("span",null,v)); pr.appendChild(c); });
+
+  // sieve
+  const f=d.funnel, max=f.total_nodes||1, s=$("#sieve"); s.innerHTML="";
+  let prev=null;
+  STAGES.forEach(([key,name,cls],i)=>{
+    const v=f[key];
+    const row=el("div","stage "+cls+(v!==prev&&prev!==null?" on":""));
+    row.appendChild(el("div","nm",name));
+    const tr=el("div","track"), fl=el("div","fill"), ct=el("div","cnt",v);
+    tr.appendChild(fl); tr.appendChild(ct); row.appendChild(tr);
+    let dtxt="", dcls="delta";
+    if(prev===null){ dtxt="of "+max; dcls="delta zero"; }
+    else if(v>prev){ dtxt="+"+(v-prev); dcls="delta gain"; }
+    else if(v===prev){ dtxt="—"; dcls="delta zero"; }
+    else { dtxt="−"+(prev-v)+" cut"; }
+    row.appendChild(el("div",dcls,dtxt));
+    s.appendChild(row);
+    const pct=Math.max(v/max*100,2.5);
+    requestAnimationFrame(()=>setTimeout(()=>{fl.style.width=pct+"%";},i*70));
+    prev=v;
+  });
+
+  // timing
+  const t=d.pipeline_timing;
+  $("#timing").innerHTML =
+    `<span>total <b>${t.total_ms} ms</b></span>`+
+    `<span>compile <b>${t.permission_compile_ms}</b></span>`+
+    `<span>bfs <b>${t.bfs_ms}</b></span>`+
+    `<span>checks <b>${(t.check_isolation_ms*5).toFixed(2)}</b></span>`+
+    `<span>budget <b>500 ms</b></span>`;
+
+  // notes
+  const n=$("#notes"); n.innerHTML="";
+  (d._demo?.notes||[]).forEach(x=>n.appendChild(el("div","note",x)));
+
+  drawDAG(d._demo?.reachable_levels||[], d.entry_point);
+  drawCandidates(d.candidate_set);
+}
+
+function drawDAG(reach, entry){
+  const box=$("#dag"); box.innerHTML="";
+  const set=new Set(reach||[]);
+  const byId={}; HIER.forEach(h=>byId[h.id]=h);
+  const kids={}; HIER.forEach(h=>h.parent_ids.forEach(p=>{(kids[p]=kids[p]||[]).push(h.id)}));
+  const roots=HIER.filter(h=>!h.parent_ids.length).map(h=>h.id);
+  const seen=new Set();
+  const walk=(id,depth)=>{
+    if(seen.has(id))return; seen.add(id);
+    const h=byId[id];
+    const cls=["dnode"];
+    if(set.has(id))cls.push("reach");
+    if(id===entry)cls.push("entry");
+    if(h.zone===2)cls.push("g2");
+    const r=el("div",cls.join(" "));
+    r.style.paddingLeft=(depth*15)+"px";
+    r.appendChild(el("span","dot"));
+    r.appendChild(el("span","lv","L"+h.level_number));
+    r.appendChild(el("span",null,h.level_name));
+    if(h.parent_ids.length>1) r.appendChild(el("span","lv","◇multi-parent"));
+    if(id===entry) r.appendChild(el("span","you","ENTRY"));
+    box.appendChild(r);
+    (kids[id]||[]).sort().forEach(k=>walk(k,depth+1));
+  };
+  roots.forEach(r=>walk(r,0));
+  $("#dag-count").textContent = reach ? `${set.size} of ${HIER.length} tiers reachable` : "";
+}
+
+function drawCandidates(list){
+  const box=$("#cand"); box.innerHTML="";
+  $("#cand-count").textContent = list.length+" nodes";
+  if(!list.length){ box.appendChild(el("p","hint","No nodes survived.")); return; }
+  const order=["CONSTRAINT","DECISION","ANTI_PATTERN","FACT"];
+  const t=el("table");
+  const hd=el("tr");
+  ["","Node","Type","Imp","Lvl","Dist","Compression","Src"]
+    .forEach(h=>hd.appendChild(el("th",null,h)));
+  t.appendChild(hd);
+  order.forEach(ty=>{
+    const grp=list.filter(c=>c.type===ty);
+    if(!grp.length)return;
+    const gr=el("tr"); const gc=el("td","grp",ty.replace("_"," ")+" · "+grp.length);
+    gc.colSpan=8; gr.appendChild(gc); t.appendChild(gr);
+    grp.forEach(c=>{
+      const r=el("tr");
+      r.appendChild(el("td","id",c.id));
+      const td=el("td"); td.appendChild(document.createTextNode(c.title));
+      r.appendChild(td);
+      const tt=el("td"); tt.appendChild(el("span","tag t-"+c.type,c.type[0]+c.type.slice(1).toLowerCase().replace("_"," ")));
+      r.appendChild(tt);
+      r.appendChild(el("td","num",c.importance.toFixed(2)));
+      r.appendChild(el("td","num","L"+c.hierarchy_level));
+      r.appendChild(el("td","num",c.distance_from_entry));
+      r.appendChild(el("td","num",c.compression_hint));
+      r.appendChild(el("td","src"+(c.source==="ZONE2"?" z":""),c.source));
+      t.appendChild(r);
+    });
+  });
+  box.appendChild(t);
+}
+
+async function compare(){
+  const ids=USERS.map(u=>u.id).join(",");
+  const rows=await get("/api/compare?users="+ids+qs());
+  const box=$("#cmp"); box.innerHTML="";
+  rows.forEach(d=>{
+    const ids=new Set(d.candidate_set.map(c=>c.id));
+    const c=el("div","col");
+    c.appendChild(el("h3",null,d.user_name));
+    c.appendChild(el("div","meta",`${d.role} · L${d.ceiling_level} · ${d.department}`));
+    const b=el("div","big"); b.appendChild(el("b",null,d.candidate_set.length));
+    b.appendChild(el("span",null,"nodes")); c.appendChild(b);
+    const rw=el("div","rows");
+    const line=(k,v,ok)=>{const r=el("div","rw");r.appendChild(el("span",null,k));
+      const s=el("span",ok===undefined?null:(ok?"yes":"no"),v);r.appendChild(s);rw.appendChild(r);};
+    line("BFS reach",d.funnel.after_bfs);
+    line("+ Zone 2",d.funnel.after_zone2);
+    line("Entry",d.entry_point.replace("HL-",""));
+    line("HOD budget", ids.has("N-O11")?"visible":"hidden", ids.has("N-O11"));
+    line("Vendor strategy", ids.has("N-O12")?"visible":"hidden", ids.has("N-O12"));
+    line("Cardiology trial", ids.has("N-C04")?"visible":"hidden", ids.has("N-C04"));
+    line("Drug safety", ids.has("N-G01")?"visible":"hidden", ids.has("N-G01"));
+    line("Sepsis v2 (old)", ids.has("N-M08")?"LEAK":"hidden", !ids.has("N-M08"));
+    c.appendChild(rw); box.appendChild(c);
+  });
+}
+
+$("#run").onclick=run;
+$("#user").onchange=run;
+$("#mode").onchange=run;
+$("#thr").onchange=run;
+$("#a-run").onclick=runAdhoc;
+$("#cmp-run").onclick=compare;
+$("#z2").onclick=e=>{ Z2=!Z2; e.target.setAttribute("aria-pressed",Z2);
+  e.target.textContent=Z2?"On":"Off"; run(); };
+
+boot();
+</script>
+</body>
+</html>
