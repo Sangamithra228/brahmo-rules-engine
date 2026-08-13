@@ -4,38 +4,34 @@
 
 @layer base {
   body {
-    @apply bg-wash text-ink font-sans antialiased;
+    @apply bg-wash text-ink font-sans text-sm antialiased;
   }
   :focus-visible {
-    @apply outline-none ring-2 ring-pass ring-offset-2;
+    @apply outline-none ring-2 ring-pass ring-offset-1;
+  }
+  th {
+    @apply text-left font-medium text-muted;
   }
 }
 
 @layer components {
-  .panel      { @apply bg-white border border-rule rounded-sm; }
-  .panel-hd   { @apply flex flex-wrap items-center justify-between gap-3
-                       px-4 py-3 border-b border-rule; }
-  .panel-title{ @apply font-mono text-[11px] font-semibold uppercase
-                       tracking-[0.14em] text-muted; }
-  .label      { @apply font-mono text-[10px] uppercase tracking-[0.12em] text-muted; }
-  .control    { @apply font-mono text-[13px] px-2.5 py-2 border border-rule-strong
-                       rounded-sm bg-white text-ink; }
-  .btn        { @apply font-mono text-[12px] uppercase tracking-[0.1em] font-semibold
-                       px-4 py-2 rounded-sm border border-ink bg-ink text-white
-                       hover:bg-ink-soft disabled:opacity-40
-                       disabled:cursor-not-allowed transition-colors; }
-  .btn-ghost  { @apply font-mono text-[12px] uppercase tracking-[0.1em] px-4 py-2
-                       rounded-sm border border-rule-strong bg-transparent text-ink
-                       hover:bg-wash transition-colors; }
-}
+  .panel     { @apply bg-white border border-rule; }
+  .panel-hd  { @apply flex flex-wrap items-baseline justify-between gap-3
+                      px-4 py-2.5 border-b border-rule; }
+  .panel-ttl { @apply text-[13px] font-semibold text-ink; }
+  .meta      { @apply text-[13px] text-muted; }
 
-/* The hatched ground behind each sieve bar: the mass a check removed stays
-   visible rather than simply disappearing. */
-.sieve-track {
-  background-image: repeating-linear-gradient(
-    135deg, transparent, transparent 4px, #F3DCE0 4px, #F3DCE0 8px);
-}
+  .field-label { @apply block text-[13px] text-muted mb-1; }
+  .control     { @apply text-sm px-2.5 py-1.5 border border-rule-strong
+                        bg-white text-ink rounded-none; }
 
-@media (prefers-reduced-motion: reduce) {
-  .sieve-fill { transition: none !important; }
+  .btn       { @apply text-sm font-medium px-3.5 py-1.5 border border-ink
+                      bg-ink text-white hover:bg-ink-soft
+                      disabled:opacity-40 disabled:cursor-not-allowed; }
+  .btn-quiet { @apply text-sm px-3.5 py-1.5 border border-rule-strong
+                      bg-white text-ink hover:bg-wash
+                      disabled:opacity-40 disabled:cursor-not-allowed; }
+
+  /* Monospace is reserved for identifiers, counts and timings. */
+  .num { @apply font-mono tabular-nums; }
 }

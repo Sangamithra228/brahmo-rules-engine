@@ -19,7 +19,9 @@ answers, from one code path:
 | Dr. Sunita | QUALITY | L6 | quality | Hospital (cross-dept) | 22 |
 | Admin Suresh | ADMIN | L1 | admin | Hospital (cross-dept) | 42 |
 
-Runs in 0.7–2 ms against a 500 ms budget.
+Measured 1–6 ms per run against the 500 ms target, on the SQLite fallback.
+Timing on Supabase will be higher (network round trips) and has not been
+measured — see *Known tradeoffs*.
 
 ---
 
@@ -67,6 +69,10 @@ itself, is in [`docs/architecture.md`](docs/architecture.md).
 | Backend | Python 3.11+, FastAPI |
 | Frontend | React 18, Vite, Tailwind CSS |
 | Tests | `unittest`, 98 tests, standard library only |
+
+The React frontend is real (Vite + React 18 + Tailwind, source in
+`frontend/src`). It has **not been built or linted in this environment** — see
+*Known tradeoffs* before the demo.
 
 ---
 
@@ -156,7 +162,9 @@ instructions rather than silently using the wrong database.
 python -m unittest discover -s backend/tests -t .
 ```
 
-98 tests, no dependencies, run against SQLite. Coverage:
+98 tests, no dependencies. They run against the SQLite fallback, so the
+PostgreSQL dialect is verified by asserting on the SQL the builder emits
+rather than by executing it. Coverage:
 
 | Area | File |
 |---|---|
@@ -235,7 +243,9 @@ unknown roles fall through to a policy that grants nothing.
 - Checks 1–4 are indexed SQL predicates; every one has a supporting index plus
   a composite covering the hot path.
 - Derivability is a precomputed column — the scoring cost sits at ingest.
-- Measured 0.7–2 ms per run. The dashboard displays the real backend figure.
+- Measured 1–6 ms per run across all seven users on the SQLite fallback. The
+  dashboard displays the figure the backend reports, never a fabricated one.
+  Supabase timing is not yet measured.
 
 ---
 
@@ -259,6 +269,15 @@ unknown roles fall through to a policy that grants nothing.
 ---
 
 ## Known tradeoffs
+
+- **The frontend has not been built.** `npm install` and `npm run build` have
+  not been run against this source, and neither has ESLint. The module graph,
+  imports and JSX nesting were checked statically. Run `npm install && npm run
+  build` before relying on it.
+- **Supabase has not been connected.** The schema, seed and RLS SQL are
+  written and the PostgreSQL dialect is unit-tested, but no run has been made
+  against a live Supabase instance. Every runtime figure quoted in this README
+  came from the SQLite fallback.
 
 - **Per-check timings are apportioned, not individually measured.** The five
   checks run as five progressive SQL statements; timing each separately would
