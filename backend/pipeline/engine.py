@@ -122,6 +122,7 @@ class RulesEngine:
                 list(walk.reachable.keys())
                 if opts.permission_mode == "scope_aware" else []
             ),
+            dialect=getattr(self.repo, "dialect", "sqlite"),
         )
 
         t = time.perf_counter()

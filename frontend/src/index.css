@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-wash text-ink font-sans antialiased;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-pass ring-offset-2;
+  }
+}
+
+@layer components {
+  .panel      { @apply bg-white border border-rule rounded-sm; }
+  .panel-hd   { @apply flex flex-wrap items-center justify-between gap-3
+                       px-4 py-3 border-b border-rule; }
+  .panel-title{ @apply font-mono text-[11px] font-semibold uppercase
+                       tracking-[0.14em] text-muted; }
+  .label      { @apply font-mono text-[10px] uppercase tracking-[0.12em] text-muted; }
+  .control    { @apply font-mono text-[13px] px-2.5 py-2 border border-rule-strong
+                       rounded-sm bg-white text-ink; }
+  .btn        { @apply font-mono text-[12px] uppercase tracking-[0.1em] font-semibold
+                       px-4 py-2 rounded-sm border border-ink bg-ink text-white
+                       hover:bg-ink-soft disabled:opacity-40
+                       disabled:cursor-not-allowed transition-colors; }
+  .btn-ghost  { @apply font-mono text-[12px] uppercase tracking-[0.1em] px-4 py-2
+                       rounded-sm border border-rule-strong bg-transparent text-ink
+                       hover:bg-wash transition-colors; }
+}
+
+/* The hatched ground behind each sieve bar: the mass a check removed stays
+   visible rather than simply disappearing. */
+.sieve-track {
+  background-image: repeating-linear-gradient(
+    135deg, transparent, transparent 4px, #F3DCE0 4px, #F3DCE0 8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sieve-fill { transition: none !important; }
+}

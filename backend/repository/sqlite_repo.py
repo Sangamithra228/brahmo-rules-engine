@@ -30,6 +30,9 @@ def _tag_blob(tags: List[str]) -> str:
 
 
 class SQLiteRepository(Repository):
+    dialect = "sqlite"
+    backend_name = "sqlite"
+
     def __init__(self, db_path: str = None):
         self.db_path = os.path.abspath(db_path or DEFAULT_DB_PATH)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -171,6 +174,14 @@ class SQLiteRepository(Repository):
                 (src, tgt, etype),
             )
         c.commit()
+
+    def is_seeded(self, org_id: str = "supra") -> bool:
+        """True when the schema exists and carries rows. Used by the factory
+        to decide whether the local fallback needs building."""
+        try:
+            return self.total_node_count(org_id) > 0
+        except sqlite3.OperationalError:
+            return False
 
     # ---------------- reads ----------------
     def list_users(self) -> List[User]:

@@ -1,6 +1,32 @@
 # Architecture — BFS Traversal + 5-Check Filter Pipeline
 
-## The shape of it
+## The pipeline
+
+```
+User
+ ↓
+Permission Compiler
+ ↓
+Entry Point Resolver
+ ↓
+BFS
+ ↓
+Zone 2
+ ↓
+Isolation
+ ↓
+Compliance
+ ↓
+Permission
+ ↓
+Temporal
+ ↓
+Derivability
+ ↓
+Candidate Set
+```
+
+In more detail:
 
 ```
 User row
@@ -289,6 +315,44 @@ The graph is declared acyclic, so a cycle is a bug, not a case to tolerate.
    Postgres trigger using a recursive CTE. Rejecting at the door beats
    detecting at query time.
 
+## Decision 11 — Supabase is primary, and the fallback is never silent
+
+Supabase / PostgreSQL is the default store. SQLite exists only as an explicit
+offline fallback, selected with `DATABASE_BACKEND=sqlite`.
+
+The important part is the failure mode. With `DATABASE_BACKEND` unset the
+application targets Supabase, and if `SUPABASE_DB_URL` is missing or the
+psycopg driver is absent it raises `DatabaseNotConfigured` carrying setup
+instructions. It does **not** quietly drop to SQLite. A demo that appeared to
+work while reading the wrong database would be worse than one that refused to
+start, and a silent fallback is exactly the kind of thing nobody notices until
+the numbers are being questioned on a call.
+
+`/health` reports both `database_backend` (the store actually in use) and
+`configured_backend` (what the environment asked for), so the dashboard can
+never misrepresent which database produced the numbers on screen.
+
+## Decision 12 — one predicate builder, two SQL dialects
+
+The five checks are written once, in `build_predicates`, and emitted in the
+dialect the repository declares:
+
+| | SQLite | PostgreSQL |
+|---|---|---|
+| Placeholders | `?` | `%s` |
+| Compliance | `required_tags NOT LIKE ?` | `NOT (%s = ANY(compliance_tags))` |
+| Timestamps | text compare | `%s::timestamptz` |
+
+SQLite has no array type, so `compliance_tags` is denormalised into a
+`,MNPI,CONFIDENTIAL,` shaped string at load time. PostgreSQL uses the native
+`TEXT[]` with a GIN index, which is both faster and the correct model.
+
+The earlier design tried to translate SQLite fragments into Postgres by string
+substitution. That was wrong twice over: it produced `required_tags` references
+against a column PostgreSQL does not have, and it collided with psycopg's own
+`%s` placeholders. Predicates are now built for the target dialect from the
+start, and no SQL string is ever rewritten.
+
 ---
 
 ## Scaling to 15,000 nodes across 12 hospitals
@@ -322,15 +386,21 @@ Multi-tenancy would move from a `WHERE` clause to partitioning on `org_id`.
 
 ## Known gaps
 
-- **Frontend is vanilla HTML/CSS/JS, not React + Tailwind.** Deliberate: it is
-  one self-contained file with no build step and no CDN, so it cannot fail
-  mid-demo because a network request timed out. The tradeoff is real and the
-  port is mechanical — the API is plain JSON and the components map one to one.
-- **Default store is SQLite, not Supabase.** `SupabaseRepository` implements
-  the same interface and `supabase/` holds schema, seed and RLS policies. The
-  swap is one line in `backend/main.py`. SQLite is the default so the demo
-  starts with zero installs and zero credentials.
 - **Per-check timings are apportioned, not individually measured.** The five
   checks execute as five progressive SQL statements; timing each separately
   would mean five extra round trips to report a number that is already under
   2 ms in total.
+- **RLS and the application both filter.** Checks 1–4 are enforced in the
+  pipeline and, if `rls_policies.sql` is applied, again by PostgreSQL. The
+  duplication is intentional — the application path is what the demo
+  exercises, RLS covers direct database access — but it does mean the rules
+  exist in two places and must be kept in step.
+- **The test suite runs against SQLite.** It is the same seed data and the
+  same predicate builder, but the PostgreSQL dialect is exercised by unit
+  tests on the emitted SQL rather than against a live database, since the
+  suite must run without credentials.
+- **`superseded_by` is honoured in check 4 alongside `status`.** The supplied
+  seed data expresses supersession through `status = 'SUPERSEDED'` and an
+  edge, and leaves the `superseded_by` column null. Both paths are checked so
+  a node that points at a replacement is excluded even if someone forgot to
+  flip its status.

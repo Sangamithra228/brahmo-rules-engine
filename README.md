@@ -1,186 +1,274 @@
 # BRAHMO Rules Engine — BFS Traversal + 5-Check Filter Pipeline
 
 Takes a knowledge graph and a user, and produces the candidate set that user
-should see. Traverses a DAG, injects hospital-wide safety nodes, then runs five
-sequential checks that narrow the result down.
+should see. Traverses a DAG upward from the user's entry point, injects
+hospital-wide safety nodes, then applies five sequential checks.
 
-**Zero LLM. Zero embeddings at query time. Fully deterministic.**
+**Zero LLM. Zero runtime embeddings. Fully deterministic.**
 
-Seven users query the same 50-node graph and get seven different answers:
+Seven seeded users query the same 50-node graph and get seven different
+answers, from one code path:
 
-| User | Role | Ceiling | Sees |
-|---|---|---:|---:|
-| Nurse Priya | VIEWER | L10 | 13 |
-| Dr. Vikram | HOD | L4 | 22 |
-| Dr. Ananya | EDITOR | L8 | 11 |
-| Dr. Sharma | HOD | L4 | 15 |
-| Pharmacist Ravi | VIEWER | L12 | 8 |
-| Dr. Sunita (QA) | QUALITY | L6 | 22 |
-| Admin Suresh | ADMIN | L1 | 42 |
+| User | Role | Ceiling | Department | Entry point | Final |
+|---|---|---:|---|---|---:|
+| Nurse Priya | VIEWER | L10 | ortho | Ortho Ward (L10) | 13 |
+| Dr. Vikram | HOD | L4 | ortho | Ortho Dept (L5) | 22 |
+| Dr. Ananya | EDITOR | L8 | medicine | Medicine General (L8) | 11 |
+| Dr. Sharma | HOD | L4 | medicine | Medicine Dept (L5) | 15 |
+| Pharmacist Ravi | VIEWER | L12 | pharmacy | Hospital (fallback) | 8 |
+| Dr. Sunita | QUALITY | L6 | quality | Hospital (cross-dept) | 22 |
+| Admin Suresh | ADMIN | L1 | admin | Hospital (cross-dept) | 42 |
 
-Same code, same graph, same query path. 0.7–2 ms per run against a 500 ms
-budget.
+Runs in 0.7–2 ms against a 500 ms budget.
 
 ---
 
-## Run it
+## Architecture
 
-```bash
-python3 run_demo.py
-# → http://localhost:8000
+```
+User profile
+   │
+   ├─ Permission Compiler ──── compiled once per session into an O(1)
+   │                           {level: {can_read, can_write}} map + clearance set
+   ├─ Entry Point Resolver ─── department + ceiling → starting DAG tier
+   │
+   ├─ BFS Traversal ────────── upward through parent edges, plus a
+   │                           department-scoped walk down; queue + visited set;
+   │                           multi-parent safe; distance_from_entry recorded
+   ├─ Zone 2 Injection ─────── GLOBAL nodes merged into the candidate pool,
+   │                           after BFS and before the checks
+   │
+   ├─ Check 1  ISOLATION ───── org_id = user.org_id
+   ├─ Check 2  COMPLIANCE ──── clearance-driven; the profile decides, not the code
+   ├─ Check 3  PERMISSION ──── hierarchy ceiling from the compiled map
+   ├─ Check 4  TEMPORAL ────── status, superseded_by, valid_until
+   ├─ Check 5  DERIVABILITY ── precomputed score vs configured threshold
+   │
+   └─ Candidate Set ────────── annotated with type, importance, zone,
+                               hierarchy_level, distance_from_entry,
+                               compression_hint
 ```
 
-No `pip install`. No database credentials. No network. Python 3.11+ and the
-standard library, because a demo that cannot fail on a missing dependency is
-worth more than framework points.
+The checks are **sequential**. Each contributes one SQL predicate, and the
+repository ANDs them progressively: stage *k* runs with predicates 1..*k*, so
+the rows entering check *k+1* are exactly the rows that survived check *k*.
+They are never evaluated independently or in parallel.
 
-Run the tests:
+Full reasoning, including three places where the assessment brief contradicts
+itself, is in [`docs/architecture.md`](docs/architecture.md).
+
+---
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Database | Supabase / PostgreSQL (**primary**), SQLite (offline fallback) |
+| Backend | Python 3.11+, FastAPI |
+| Frontend | React 18, Vite, Tailwind CSS |
+| Tests | `unittest`, 98 tests, standard library only |
+
+---
+
+## Setup
+
+### 1. Supabase (the primary database)
+
+1. Create a project at [supabase.com](https://supabase.com).
+2. SQL Editor → run in order:
+   - `supabase/schema.sql` — tables, indexes, cycle-rejection trigger
+   - `supabase/seed.sql` — 50 nodes, 7 users, 20 tiers, 10 edges
+   - `supabase/rls_policies.sql` — optional, checks 1–4 as Row-Level Security
+3. Verify:
+   ```sql
+   SELECT COUNT(*) FROM knowledge_nodes;   -- 50
+   SELECT COUNT(*) FROM users;             -- 7
+   SELECT COUNT(*) FROM hierarchy_levels;  -- 20
+   ```
+4. Copy the connection string: Project Settings → Database → Connection
+   string → URI.
+
+### 2. Environment
 
 ```bash
-python3 -m unittest discover -s backend/tests -t .
-# 66 tests
+cp .env.example .env
 ```
 
-### The stack the brief specifies
+Set `SUPABASE_DB_URL` in `.env`. `DATABASE_BACKEND` defaults to `supabase`.
 
-FastAPI and Supabase are both implemented; SQLite and the stdlib server are
-the defaults so the demo starts cold.
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_BACKEND` | `supabase` | `supabase` or `sqlite` |
+| `SUPABASE_DB_URL` | — | PostgreSQL connection string |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` | — | Supabase project API |
+| `BRAHMO_ORG_ID` | `supra` | Tenant |
+| `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff |
+| `BRAHMO_PERMISSION_MODE` | `strict` | `strict` or `scope_aware` |
+
+`.env` is gitignored. No credentials are committed anywhere in this repo.
+
+### 3. Backend
 
 ```bash
+python -m venv venv
+source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn backend.main:app --reload --port 8000
 ```
 
-To point at Supabase: run `supabase/schema.sql`, then `supabase/seed.sql`,
-then optionally `supabase/rls_policies.sql`; copy `.env.example` to `.env` and
-fill in `SUPABASE_DB_URL`; and change one line in `backend/main.py`:
+### 4. Frontend
 
-```python
-from backend.repository.supabase_repo import SupabaseRepository
-repo = SupabaseRepository()
+```bash
+cd frontend
+npm install
+npm run dev                       # http://localhost:5173
 ```
 
-`SupabaseRepository` implements the same interface, so nothing else changes.
+The Vite dev server proxies `/health`, `/users`, `/hierarchy`, `/pipeline` and
+`/admin` to `localhost:8000`, so both run side by side with no CORS setup.
+
+To build once and serve everything from FastAPI:
+
+```bash
+cd frontend && npm run build      # emits frontend/dist
+uvicorn backend.main:app --port 8000    # now also serves the dashboard at /
+```
+
+### Offline fallback
+
+If Supabase is not reachable, or you want to run with nothing installed:
+
+```bash
+DATABASE_BACKEND=sqlite python run_demo.py
+# PowerShell:  $env:DATABASE_BACKEND="sqlite"; python run_demo.py
+```
+
+This seeds a local SQLite copy of the same supplied dataset and serves the API
+on the standard library alone. **It is an explicit opt-in.** With
+`DATABASE_BACKEND` unset the app targets Supabase and fails with setup
+instructions rather than silently using the wrong database.
 
 ---
 
-## The pipeline
+## Tests
 
-```
-User row
-  → Permission Compiler    O(1) {level: {can_read, can_write}} + clearance
-  → Entry Point Resolver   department + ceiling → starting tier
-  → BFS Traversal          up the DAG, plus a department-scoped walk down
-  → Zone 2 Injection       global safety nodes added to the pool
-  → Five Checks            ISOLATION → COMPLIANCE → PERMISSION →
-                           TEMPORAL → DERIVABILITY   (progressive SQL)
-  → Candidate Assembler    distance, zone, compression hint
+```bash
+python -m unittest discover -s backend/tests -t .
 ```
 
-Checks 1–4 execute as progressive SQL `WHERE` clauses. Stage *k* runs with
-predicates 1..*k*, so the rows entering check *k+1* are exactly the rows that
-survived check *k* — sequential by construction, evaluated by the database.
-A node Priya may not see is never read on her behalf, which is the GAP 5
-requirement.
+98 tests, no dependencies, run against SQLite. Coverage:
 
-`supabase/rls_policies.sql` pushes the same four checks into Row-Level
-Security, so bypassing the API and querying Postgres directly returns the same
-filtered rows.
+| Area | File |
+|---|---|
+| BFS upward traversal, multi-parent, visited set, cycles | `test_bfs.py` |
+| Permission compilation, clearance scoping, fail-closed roles | `test_permission_compiler.py` |
+| Each of the five checks, ordering, thresholds | `test_five_checks.py` |
+| Per-user differentiation, silent exclusion, determinism, latency | `test_pipeline.py` |
+| Unseen users, new departments, unknown roles | `test_surprise_users.py` |
+| Expired / superseded nodes, compression hints | `test_temporal_and_metadata.py` |
+| API surface, database config, SQL dialects, sequential execution | `test_api_and_config.py` |
+| Derivability scorer calibration | `test_derivability.py` |
 
 ---
 
 ## API
 
-| Route | Purpose |
-|---|---|
-| `GET /` | Dashboard |
-| `GET /health` | Node count, user count, `graph_acyclic`, `llm_calls: 0` |
-| `GET /api/users` | The 7 profiles |
-| `GET /api/hierarchy` | The 20-tier DAG |
-| `GET /api/pipeline?user=U-PRIYA` | Run it |
-| `GET /api/compare?users=A,B,C` | Side by side |
-| `GET /api/audit?user=U-PRIYA` | Operator-only exclusion trail |
-| `GET /api/derivability` | Offline scorer calibration report |
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/health` | Counts, active backend, `graph_acyclic`, `llm_calls: 0` |
+| GET | `/users` | All seeded profiles |
+| GET | `/users/{user_id}` | One profile |
+| GET | `/hierarchy` | The 20-tier DAG |
+| POST | `/pipeline/run` | Run the pipeline |
+| GET | `/pipeline/compare?users=A,B,C` | Several users side by side |
+| GET | `/pipeline/{run_id}` | Replay a completed run |
+| GET | `/admin/audit?user=…` | Operator-only exclusion trail |
+| GET | `/admin/derivability` | Scorer calibration report |
 
-Options on `/api/pipeline` and `/api/compare`: `zone2=false`,
-`threshold=0.5`, `mode=scope_aware`.
+`POST /pipeline/run` accepts either a seeded user or an inline profile:
 
-Run a profile that is not in the database — this is how the surprise-user test
-is handled live, with nothing written to disk:
+```jsonc
+{ "user": "U-PRIYA", "zone2": true, "threshold": 0.7, "mode": "strict" }
 
-```
-/api/pipeline?role=AUDITOR&department=audit&ceiling=3&clearance=MNPI&name=External+Auditor
-```
-
-The dashboard has the same thing under "Test an unseen profile".
-
----
-
-## Demo script
-
-**1. Priya — the core pipeline.** 50 → BFS 20 → +Zone 2 30 → 13. Walk the
-sieve: compliance takes 5, permission takes 10, derivability takes 2. Her set
-has zero Cardiology, zero Paediatrics, zero Medicine, zero MNPI, zero
-superseded, zero derivable.
-
-**2. Vikram — same graph, different person.** Switch the dropdown. 13 → 22.
-His entry point moves to Ortho Dept (L5), his HOD role clears his own
-department's MNPI. He sees `N-O11` (the budget). He does not see `N-O12` —
-MNPI **and** CONFIDENTIAL needs admin clearance. Every tag must clear, not any.
-
-**3. Silent exclusion.** Priya's response contains no removed count, no
-placeholder, no 403. Then open `/api/audit?user=U-PRIYA` and show the trail
-exists — on a separate operator endpoint, fetching ids and titles only, never
-content.
-
-**4. Zone 2 saves lives.** Toggle Zone 2 off. Priya drops 13 → 5 and loses all
-eight drug-safety globals including the Warfarin/NSAID rule. Toggle on. That
-gap is the argument.
-
-**5. Innovation.** `/api/derivability`: the offline scorer, 96% agreement with
-the seeded labels, and the two disagreements — `N-G04` and `N-G06` — where I
-think the seed data is wrong and the nodes should be split. Detail in
-Decision 9.
-
-**6. Surprise user.** Take their profile, type it into the ad-hoc form, run.
-
----
-
-## Layout
-
-```
-backend/
-  data/seed_data.py          canonical seed — one source of truth
-  policy/role_policy.py      declarative role table; no role logic in the pipeline
-  pipeline/                  the six stages
-  repository/                base interface + SQLite + Supabase
-  derivability/scorer.py     offline heuristic scorer (innovation)
-  tests/                     66 tests
-  main.py                    FastAPI app
-  server.py                  stdlib server (zero deps)
-frontend/index.html          self-contained dashboard
-supabase/                    schema.sql, seed.sql, rls_policies.sql
-docs/architecture.md         every design decision, and the spec contradictions
-docs/data_sources.md         provenance
+// or a profile that exists in no database:
+{ "role": "AUDITOR", "department": "audit", "ceiling": 3,
+  "clearance": ["MNPI"], "name": "External Auditor" }
 ```
 
 ---
 
-## Notes on the brief
+## Security model
 
-The specification contradicts itself in three places. All three are resolved
-deliberately and documented in `docs/architecture.md` rather than papered over:
+**Silent exclusion.** A node the user may not see is simply absent. The
+response carries no removed count, no placeholder row, no 403, no "restricted"
+marker. `PipelineResult` has two serialisers — a public one that cannot
+express an exclusion, and an operator one behind `/admin/audit` — rather than
+one serialiser with a flag, because a flag is one careless `if` from leaking.
+The audit path returns node ids and titles only, never content.
 
-- **Zone 2 vs. the permission ceiling** (Decision 3). Applying
-  `hierarchy_level >= ceiling` literally deletes every drug-safety node from
-  Priya's session, which breaks Scenario 4 and inverts the opening story.
-- **The ceiling vs. the sample output** (Decision 4). The sample candidate set
-  shows Priya seeing an L8 node while her ceiling is L10. Both readings are
-  implemented as modes; `strict` is the default.
-- **Vikram's clearance** (Decision 5). His seeded clearance is empty, yet he
-  is expected to see the MNPI budget node. Clearance is therefore compiled
-  from role plus row, with a HOD's MNPI scoped to their own department.
+The DAG panel shows hierarchy *tiers*, not node identities, so it cannot
+become a side channel around this. There is a test asserting that no node id
+appears in the traversal payload.
 
-Under these decisions Vikram lands on 22, matching the published figure
-exactly; Priya lands on 13 against a published ~15 and Suresh on 42 against
-~40, and both differences are arithmetic I can walk through node by node.
+**Filtering happens in the database.** Checks 1–4 execute as progressive SQL
+`WHERE` clauses, so restricted rows are never read on the user's behalf and
+never cross the network (GAP 5). Only the final survivors have their content
+fetched. `supabase/rls_policies.sql` pushes the same four checks into
+Row-Level Security as defence in depth — the answer to "what if someone
+bypasses the API and queries the database directly?"
+
+Check 5 is deliberately **not** in RLS: derivability is a relevance judgement,
+not access control, and Postgres should not refuse an administrator a node
+purely for being obvious.
+
+**Nothing is hardcoded per user.** Role behaviour lives in a declarative table
+(`backend/policy/role_policy.py`). There is no `if user == "Priya"` anywhere;
+unknown roles fall through to a policy that grants nothing.
+
+---
+
+## Performance
+
+- Permissions compile **once** per run into a dict — no per-node query, no N+1.
+- BFS walks the hierarchy DAG (tens of tiers), not the knowledge nodes, so a
+  user's traversal cost is independent of total graph size.
+- Checks 1–4 are indexed SQL predicates; every one has a supporting index plus
+  a composite covering the hot path.
+- Derivability is a precomputed column — the scoring cost sits at ingest.
+- Measured 0.7–2 ms per run. The dashboard displays the real backend figure.
+
+---
+
+## Demo scenarios
+
+1. **Nurse Priya** — full pipeline. 50 → BFS 20 → +Zone 2 30 → 13. The funnel
+   shows compliance taking 5, permission 10, derivability 2.
+2. **Dr. Vikram** — same graph, 22 nodes. Different entry point, and his HOD
+   role clears his own department's MNPI: he sees `N-O11` (budget) but not
+   `N-O12`, because every tag must clear, not any.
+3. **Silent exclusion** — Priya's set has zero Cardiology, Paediatrics or
+   Medicine nodes and no indication they exist. Then show `/admin/audit` to
+   prove the trail exists on a separate operator endpoint.
+4. **Zone 2** — toggle off: Priya drops 13 → 5 and loses all eight drug-safety
+   globals including the Warfarin/NSAID rule. Toggle on. Note that two Zone 2
+   nodes (`N-G04`, `N-G06`) are still removed by check 5, so injection widens
+   the input to the sieve rather than punching through it.
+5. **Surprise user** — type their profile into "Test an unseen profile". No
+   code change, no database write.
+
+---
+
+## Known tradeoffs
+
+- **Per-check timings are apportioned, not individually measured.** The five
+  checks run as five progressive SQL statements; timing each separately would
+  add round trips to report a number already under 2 ms in total.
+- **RLS is provided but the application also filters.** Both layers enforce
+  checks 1–4. The application path is what the demo exercises; RLS is defence
+  in depth for direct database access.
+- **The SQLite fallback denormalises `compliance_tags`** into a `required_tags`
+  string because SQLite has no array type. PostgreSQL uses native `TEXT[]` with
+  a GIN index. The predicate builder is dialect-aware; the rules are identical.
+- **`strict` is the default permission mode** because it matches the brief's
+  literal rule, but `scope_aware` is arguably the better production model. See
+  Decision 4 in `docs/architecture.md`.

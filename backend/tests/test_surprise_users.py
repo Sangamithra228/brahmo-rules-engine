@@ -97,6 +97,46 @@ class TestSurpriseUsers(unittest.TestCase):
         for nid in ["N-O11", "N-O12", "N-A01", "N-A02", "N-C04"]:
             self.assertNotIn(nid, got, "unknown role must fail closed")
 
+    def test_a_brand_new_department_needs_no_code_change(self):
+        """The evaluator may add a department the demo never used. BFS reads
+        the graph, so a new tier is traversed the moment it exists in the
+        database - nothing in the source names a department."""
+        import json
+        from backend.models import HierarchyLevel
+
+        self.repo._conn.execute(
+            "INSERT OR REPLACE INTO hierarchy_levels "
+            "(id,org_id,level_number,level_name,department,parent_ids,zone) "
+            "VALUES (?,?,?,?,?,?,?)",
+            ("HL-05-ONCO", "supra", 5, "Oncology Department", "oncology",
+             json.dumps(["HL-03-CLIN"]), 1))
+        self.repo._conn.execute(
+            "INSERT OR REPLACE INTO knowledge_nodes "
+            "(id,org_id,hierarchy_level_id,type,title,content,importance,zone,"
+            "status,derivability_score,compliance_tags,required_tags,"
+            "department,hierarchy_level) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("N-ONC01", "supra", "HL-05-ONCO", "CONSTRAINT",
+             "Chemo double-check", "Two-pharmacist verification before any "
+             "cytotoxic infusion.", 0.95, 1, "ACTIVE", 0.10,
+             json.dumps([]), ",", "oncology", 5))
+        self.repo._conn.commit()
+        self.eng._levels = None  # the graph changed; re-read it
+
+        try:
+            onco = profile("U-ONC", "HOD", "oncology", 4, 4)
+            got = self.ids(onco)
+            self.assertIn("N-ONC01", got,
+                          "a new department must be traversed automatically")
+            # and it stays isolated from the departments that already existed
+            self.assertNotIn("N-ONC01", self.ids(self.repo.get_user("U-PRIYA")))
+            res = self.eng.run(onco, EngineOptions())
+            self.assertEqual(res.entry_point, "HL-05-ONCO")
+        finally:
+            self.repo._conn.execute("DELETE FROM knowledge_nodes WHERE id='N-ONC01'")
+            self.repo._conn.execute("DELETE FROM hierarchy_levels WHERE id='HL-05-ONCO'")
+            self.repo._conn.commit()
+            self.eng._levels = None
+
     def test_timing_varies_with_reach_not_fixed(self):
         """A fixed runtime regardless of user would suggest nothing is
         actually being traversed."""

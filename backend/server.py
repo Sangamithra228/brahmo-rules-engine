@@ -1,18 +1,22 @@
 """
-Zero-dependency HTTP API (Python stdlib only).
+Zero-dependency HTTP API (Python standard library only).
 
-`backend/main.py` holds the FastAPI version, which is the stack the assessment
-specifies. This one exists so the demo starts with no pip install and no
-network - which on a live demo call is worth more than framework points.
-Both expose the same routes and call the same engine.
+`backend/main.py` is the primary FastAPI application. This mirror exists so
+the pipeline can be exercised and demonstrated without pip install - useful
+offline and as a fallback if the Python environment misbehaves before a demo.
 
-  GET  /api/users
-  GET  /api/hierarchy
-  GET  /api/pipeline?user=U-PRIYA[&zone2=false][&threshold=0.7][&mode=strict]
-  GET  /api/compare?users=U-PRIYA,U-VIKRAM,U-SURESH
-  GET  /api/audit?user=U-PRIYA        <- operator-only exclusion trail
-  GET  /api/derivability              <- offline scorer calibration report
+Both call backend/api.py, so behaviour cannot drift between them.
+
+Routes match FastAPI:
   GET  /health
+  GET  /users
+  GET  /users/{id}
+  GET  /hierarchy
+  GET|POST /pipeline/run
+  GET  /pipeline/compare
+  GET  /pipeline/{run_id}
+  GET  /admin/audit
+  GET  /admin/derivability
 """
 
 import json
@@ -23,41 +27,31 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.data.seed_data import KNOWLEDGE_NODES
-from backend.derivability.scorer import validate_against_seed
-from backend.pipeline.bfs_traversal import detect_cycles
-from backend.pipeline.engine import EngineOptions, RulesEngine
-from backend.repository.sqlite_repo import SQLiteRepository
+from backend import api
+from backend.config import DatabaseNotConfigured, get_repository, settings
+from backend.pipeline.engine import RulesEngine
 
-FRONTEND = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"
-)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DIST = os.path.join(ROOT, "frontend", "dist")
 
 _repo = None
 _engine = None
 
 
-def boot(db_path=None, reseed=True):
+def boot(backend=None):
     global _repo, _engine
-    _repo = SQLiteRepository(db_path)
-    if reseed:
-        _repo.initialise()
-        _repo.seed()
-    _engine = RulesEngine(_repo)
+    _repo = get_repository(backend)
+    _engine = RulesEngine(_repo, org_id=settings.org_id)
     return _repo, _engine
 
 
-def _opts(q):
-    return EngineOptions(
-        zone2_enabled=q.get("zone2", ["true"])[0].lower() != "false",
-        derivability_threshold=float(q.get("threshold", ["0.7"])[0]),
-        permission_mode=q.get("mode", ["strict"])[0],
-        include_audit=False,
-    )
+def _flat(qs):
+    """parse_qs gives lists; the API layer wants scalars."""
+    return {k: (v[0] if len(v) == 1 else v) for k, v in qs.items()}
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):  # keep the demo console clean
+    def log_message(self, *a):
         pass
 
     def _send(self, code, payload, ctype="application/json"):
@@ -69,138 +63,107 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self._send(204, b"", "text/plain")
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            params = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            return self._send(400, {"detail": "body must be JSON"})
+        self._route(urlparse(self.path).path, params)
 
     def do_GET(self):
         u = urlparse(self.path)
-        q = parse_qs(u.query)
-        path = u.path
+        self._route(u.path, _flat(parse_qs(u.query)))
 
+    def _route(self, path, params):
         try:
             if path in ("/", "/index.html"):
-                with open(os.path.join(FRONTEND, "index.html"), "rb") as f:
-                    return self._send(200, f.read(), "text/html; charset=utf-8")
+                return self._serve_index()
 
             if path == "/health":
-                return self._send(200, {
-                    "status": "ok",
-                    "nodes": _repo.total_node_count("supra"),
-                    "users": len(_repo.list_users()),
-                    "graph_acyclic": detect_cycles(_engine.levels()) == [],
-                    "llm_calls": 0,
-                })
+                return self._send(200, api.health(_repo, _engine))
+            if path == "/users":
+                return self._send(200, api.list_users(_repo))
+            if path.startswith("/users/"):
+                return self._send(200, api.get_user(_repo, path.split("/")[2]))
+            if path == "/hierarchy":
+                return self._send(200, api.hierarchy(_engine))
 
-            if path == "/api/users":
-                return self._send(200, [
-                    {"id": x.id, "name": x.name, "role": x.role,
-                     "department": x.department, "ceiling_level": x.ceiling_level,
-                     "write_ceiling": x.write_ceiling,
-                     "compliance_clearance": x.compliance_clearance}
-                    for x in _repo.list_users()
-                ])
+            if path == "/pipeline/run":
+                return self._send(200, api.run_pipeline(_repo, _engine, params))
+            if path == "/pipeline/compare":
+                ids = params.get("users") or "U-PRIYA,U-VIKRAM,U-SURESH"
+                return self._send(200, api.compare(
+                    _repo, _engine,
+                    [x.strip() for x in ids.split(",") if x.strip()], params))
+            if path.startswith("/pipeline/"):
+                return self._send(200, api.get_run(path.split("/")[2]))
 
-            if path == "/api/hierarchy":
-                return self._send(200, [
-                    {"id": l.id, "level_number": l.level_number,
-                     "level_name": l.level_name, "department": l.department,
-                     "parent_ids": l.parent_ids, "zone": l.zone}
-                    for l in _engine.levels()
-                ])
+            if path == "/admin/audit":
+                return self._send(200, api.audit(_repo, _engine, params))
+            if path == "/admin/derivability":
+                return self._send(200, api.derivability_report())
 
-            if path == "/api/pipeline":
-                uid = q.get("user", [""])[0]
-                user = _repo.get_user(uid) or _synthetic(q)
-                if not user:
-                    return self._send(404, {"error": "unknown user"})
-                res = _engine.run(user, _opts(q))
-                payload = res.to_public_dict()
-                # Traversal detail is demo scaffolding, not part of the
-                # candidate-set contract.
-                payload["_demo"] = {
-                    "notes": res.notes,
-                    "reachable_levels": sorted(
-                        _reach(user, _opts(q)).reachable.keys()),
-                }
-                return self._send(200, payload)
+            if path.startswith("/assets/"):
+                return self._serve_asset(path)
 
-            if path == "/api/compare":
-                uids = q.get("users", ["U-PRIYA,U-VIKRAM,U-SURESH"])[0].split(",")
-                out = []
-                for uid in [x.strip() for x in uids if x.strip()]:
-                    user = _repo.get_user(uid)
-                    if not user:
-                        continue
-                    r = _engine.run(user, _opts(q))
-                    out.append(r.to_public_dict())
-                return self._send(200, out)
+            return self._send(404, {"detail": "not found"})
 
-            if path == "/api/audit":
-                uid = q.get("user", [""])[0]
-                user = _repo.get_user(uid)
-                if not user:
-                    return self._send(404, {"error": "unknown user"})
-                o = _opts(q)
-                o.include_audit = True
-                return self._send(200, _engine.run(user, o).to_audit_dict())
-
-            if path == "/api/derivability":
-                v = validate_against_seed(KNOWLEDGE_NODES)
-                return self._send(200, {
-                    "threshold": v["threshold"],
-                    "agreement": v["agreement"],
-                    "total": v["total"],
-                    "disagreements": v["disagreements"],
-                    "sample": {
-                        k: {"score": e.score, "generic": e.generic_hits,
-                            "specific": e.specific_hits}
-                        for k, e in list(v["explanations"].items())[:8]
-                    },
-                })
-
-            return self._send(404, {"error": "not found"})
-
+        except api.ApiError as exc:
+            return self._send(exc.status, {"detail": exc.message})
         except Exception as exc:  # noqa: BLE001
-            return self._send(500, {"error": str(exc)})
+            return self._send(500, {"detail": str(exc)})
+
+    def _serve_index(self):
+        built = os.path.join(DIST, "index.html")
+        if os.path.exists(built):
+            with open(built, "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        return self._send(200, (
+            b"<!doctype html><meta charset=utf-8>"
+            b"<title>BRAHMO Rules Engine</title>"
+            b"<body style='font-family:system-ui;max-width:44rem;margin:4rem auto;"
+            b"line-height:1.6;color:#0D1B1A'>"
+            b"<h1 style='font-size:1.1rem;letter-spacing:.12em;text-transform:uppercase'>"
+            b"BRAHMO Rules Engine</h1>"
+            b"<p>The API is running. The React dashboard has not been built yet.</p>"
+            b"<pre style='background:#F4F7F6;padding:1rem;border-radius:4px'>"
+            b"cd frontend\nnpm install\nnpm run dev     # http://localhost:5173\n"
+            b"\n# or build once and serve from here:\nnpm run build</pre>"
+            b"<p>API: <a href='/health'>/health</a> &middot; "
+            b"<a href='/users'>/users</a> &middot; "
+            b"<a href='/pipeline/run?user=U-PRIYA'>/pipeline/run?user=U-PRIYA</a></p>"
+            b"</body>"), "text/html; charset=utf-8")
+
+    def _serve_asset(self, path):
+        safe = os.path.normpath(path.lstrip("/")).replace("..", "")
+        full = os.path.join(DIST, safe)
+        if not os.path.isfile(full):
+            return self._send(404, {"detail": "not found"})
+        ctype = ("text/css" if full.endswith(".css")
+                 else "application/javascript" if full.endswith(".js")
+                 else "application/octet-stream")
+        with open(full, "rb") as f:
+            return self._send(200, f.read(), ctype)
 
 
-def _reach(user, opts):
-    from backend.pipeline.bfs_traversal import traverse
-    from backend.pipeline.entry_point_resolver import resolve_entry_point
-    from backend.pipeline.permission_compiler import compile_permissions
-    p = compile_permissions(user)
-    e = resolve_entry_point(p, _engine.levels())
-    return traverse(e.level_id, _engine.levels(), user.department,
-                    e.is_fallback and p.policy.cross_department_on_fallback)
-
-
-def _synthetic(q):
-    """Build a user from query params so a brand-new profile can be tested
-    live during the demo without touching the database."""
-    from backend.models import User
-    if not q.get("role"):
-        return None
-    wc = q.get("write_ceiling", [None])[0]
-    return User(
-        id=q.get("id", ["U-ADHOC"])[0],
-        org_id="supra",
-        name=q.get("name", ["Ad-hoc User"])[0],
-        role=q.get("role", ["VIEWER"])[0],
-        department=q.get("department", ["ortho"])[0],
-        ceiling_level=int(q.get("ceiling", ["10"])[0]),
-        write_ceiling=int(wc) if wc else None,
-        compliance_clearance=[
-            c for c in q.get("clearance", [""])[0].split(",") if c
-        ],
-    )
-
-
-def serve(port=8000, db_path=None):
-    boot(db_path)
+def serve(port=8000, backend=None):
+    boot(backend)
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"BRAHMO Rules Engine -> http://localhost:{port}")
-    print(f"  {_repo.total_node_count('supra')} nodes, "
-          f"{len(_repo.list_users())} users, 0 LLM calls")
+    print(f"  backend={settings.backend}  "
+          f"{_repo.total_node_count(settings.org_id)} nodes  "
+          f"{len(_repo.list_users())} users  0 LLM calls")
     srv.serve_forever()
 
 

@@ -48,15 +48,29 @@ def build_predicates(
     org_id: str,
     config: FilterConfig,
     scope_exempt_level_ids: List[str] = None,
+    dialect: str = "sqlite",
 ) -> List[Predicate]:
-    """Turn a compiled permission set into the five ordered SQL predicates."""
+    """Turn a compiled permission set into the five ordered SQL predicates.
+
+    `dialect` selects placeholder style and the compliance formulation:
+
+      sqlite   - '?' placeholders; compliance tests the denormalised
+                 `required_tags` string, since SQLite has no array type.
+      postgres - '%s' placeholders; compliance uses native array membership
+                 against TEXT[] with the GIN index doing the work.
+
+    Everything else is identical, which is the point of keeping the predicate
+    builder in one place rather than duplicating the rules per store.
+    """
+    pg = dialect == "postgres"
+    ph = "%s" if pg else "?"
     preds: List[Predicate] = []
 
     # ---- Check 1: ISOLATION -------------------------------------------
     # Multi-tenant boundary. Single-org demo, so everything passes - but the
     # predicate is real, and it is FIRST, because a cross-tenant row must not
     # be evaluated by any later rule.
-    preds.append(("ISOLATION", "org_id = ?", [org_id]))
+    preds.append(("ISOLATION", f"org_id = {ph}", [org_id]))
 
     # ---- Check 2: COMPLIANCE ------------------------------------------
     # A node is withheld unless the user clears EVERY tag it carries.
@@ -66,17 +80,25 @@ def build_predicates(
     frags: List[str] = []
     params: List[Any] = []
     scoped = perms.policy.clearance_scoped_to_department
+    def _lacks_tag(tag: str):
+        """Predicate fragment + params for 'this node does not carry `tag`'."""
+        if pg:
+            return f"NOT ({ph} = ANY(compliance_tags))", [tag]
+        return f"required_tags NOT LIKE {ph}", [f"%,{tag},%"]
+
     for tag in KNOWN_COMPLIANCE_TAGS:
         if tag in perms.explicit_clearance:
             continue  # granted outright on the user row, never scoped
         if tag in perms.clearance:
             if scoped:
                 # Cleared, but only within the user's own department.
-                frags.append("(required_tags NOT LIKE ? OR department = ?)")
-                params.extend([f"%,{tag},%", perms.department])
+                frag, prms = _lacks_tag(tag)
+                frags.append(f"({frag} OR department = {ph})")
+                params.extend(prms + [perms.department])
             continue  # cleared everywhere
-        frags.append("required_tags NOT LIKE ?")
-        params.append(f"%,{tag},%")
+        frag, prms = _lacks_tag(tag)
+        frags.append(frag)
+        params.extend(prms)
     preds.append(("COMPLIANCE", " AND ".join(frags) if frags else "", params))
 
     # ---- Check 3: PERMISSION ------------------------------------------
@@ -85,7 +107,7 @@ def build_predicates(
     if len(readable) == len(perms.level_map):
         frag, prm = "", []  # role reads every tier; predicate is a no-op
     else:
-        q = ",".join("?" * len(readable)) if readable else "NULL"
+        q = ",".join([ph] * len(readable)) if readable else "NULL"
         alts = [f"hierarchy_level IN ({q})"]
         prm = list(readable)
 
@@ -102,7 +124,7 @@ def build_predicates(
         exempt = scope_exempt_level_ids or []
         if exempt:
             alts.append(
-                "hierarchy_level_id IN (%s)" % ",".join("?" * len(exempt))
+                "hierarchy_level_id IN (" + ",".join([ph] * len(exempt)) + ")"
             )
             prm += list(exempt)
 
@@ -111,10 +133,15 @@ def build_predicates(
     preds.append(("PERMISSION", frag, prm))
 
     # ---- Check 4: TEMPORAL --------------------------------------------
-    stale_q = ",".join("?" * len(STALE_STATUSES))
+    stale_q = ",".join([ph] * len(STALE_STATUSES))
+    # superseded_by is honoured alongside status: a node that points at a
+    # replacement is stale even if someone forgot to flip its status.
+    now_expr = f"{ph}::timestamptz" if pg else ph
     preds.append((
         "TEMPORAL",
-        f"status NOT IN ({stale_q}) AND (valid_until IS NULL OR valid_until > ?)",
+        f"status NOT IN ({stale_q}) "
+        f"AND superseded_by IS NULL "
+        f"AND (valid_until IS NULL OR valid_until > {now_expr})",
         list(STALE_STATUSES) + [config.resolved_now()],
     ))
 
@@ -122,7 +149,8 @@ def build_predicates(
     # Pre-computed score, compared to an org-configurable threshold. No LLM,
     # no embedding lookup, no runtime analysis - one indexed numeric compare.
     preds.append((
-        "DERIVABILITY", "derivability_score < ?", [config.derivability_threshold]
+        "DERIVABILITY", f"derivability_score < {ph}",
+        [config.derivability_threshold],
     ))
 
     return preds

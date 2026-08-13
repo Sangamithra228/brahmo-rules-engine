@@ -64,8 +64,14 @@ class SupabaseRepository(Repository):
             "SELECT id FROM knowledge_nodes WHERE org_id = %s AND zone = 2 "
             "ORDER BY id", [org_id])]
 
+    dialect = "postgres"
+    backend_name = "supabase"
+
     @staticmethod
     def _candidate_where(org_id, level_ids, extra_node_ids):
+        # NOTE: built by concatenation, never by %-formatting. The '%s' here
+        # are psycopg placeholders; running them through Python's % operator
+        # consumes them as format specifiers and raises.
         clauses, params = [], [org_id]
         if level_ids:
             clauses.append("hierarchy_level_id = ANY(%s)")
@@ -75,7 +81,13 @@ class SupabaseRepository(Repository):
             params.append(list(extra_node_ids))
         if not clauses:
             return None, []
-        return "org_id = %s AND (%s)" % " OR ".join(clauses), params
+        return "org_id = %s AND (" + " OR ".join(clauses) + ")", params
+
+    def is_seeded(self, org_id: str = "supra") -> bool:
+        try:
+            return self.total_node_count(org_id) > 0
+        except Exception:
+            return False
 
     def count_candidates(self, org_id, level_ids, extra_node_ids) -> int:
         where, params = self._candidate_where(org_id, level_ids, extra_node_ids)
@@ -99,7 +111,10 @@ class SupabaseRepository(Repository):
         parts, params = [base], list(base_params)
         for (name, frag, frag_params) in predicates:
             if frag:
-                parts.append(f"({self._to_pg(frag)})")
+                # Fragments already arrive in Postgres dialect - the engine
+                # asks the repository which dialect it speaks before building
+                # them. No string translation happens here.
+                parts.append(f"({frag})")
                 params.extend(frag_params)
             where = " AND ".join(parts)
             if collect_ids_per_stage:
@@ -122,13 +137,6 @@ class SupabaseRepository(Repository):
                     f"ORDER BY importance DESC, id", params)
             ]
         return result
-
-    @staticmethod
-    def _to_pg(fragment: str) -> str:
-        """SQLite placeholders -> Postgres. The compliance fragment's LIKE on
-        `required_tags` is equivalent to array containment here; both are kept
-        so the predicate builder stays dialect-free."""
-        return fragment.replace("?", "%s")
 
     @staticmethod
     def _user(r: dict) -> User:

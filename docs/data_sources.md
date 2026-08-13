@@ -39,6 +39,19 @@ derivability check is that some of these statements are general knowledge and
 some are organisation-specific. That distinction is only meaningful because
 the organisation is fictional and self-consistent.
 
+## Test fixtures are not seed data
+
+`backend/tests/test_temporal_and_metadata.py` inserts three fixture nodes
+(`N-TEST-EXPIRED`, `N-TEST-FUTURE`, `N-TEST-REPLACED`) and
+`test_surprise_users.py` briefly creates an Oncology tier. These exist only
+inside the test database and are removed or discarded when the test run ends.
+They are needed because the supplied dataset contains no node with an expiry
+date and only six departments, so the `valid_until` path and the
+new-department path have nothing to exercise otherwise.
+
+**None of these are added to `backend/data/seed_data.py`.** The assessment
+dataset is used exactly as supplied: 50 nodes, 7 users, 20 tiers, 10 edges.
+
 ## Data I derived rather than copied
 
 Three fields are computed, and it is worth being explicit about which:

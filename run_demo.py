@@ -1,41 +1,57 @@
 #!/usr/bin/env python3
 """
-One command to start the demo.
+Start the backend and print a per-user summary.
 
-    python3 run_demo.py            # http://localhost:8000
-    python3 run_demo.py 8080
+    python run_demo.py                 # port 8000, DATABASE_BACKEND from .env
+    python run_demo.py 8080
 
-Seeds a fresh SQLite database, verifies the graph is acyclic, prints the
-per-user summary, then serves the API and dashboard. No pip install, no
-network, no credentials.
+Database selection follows DATABASE_BACKEND (default: supabase). To run
+offline against the local SQLite fallback:
+
+    DATABASE_BACKEND=sqlite python run_demo.py
+    # PowerShell:  $env:DATABASE_BACKEND="sqlite"; python run_demo.py
+
+This serves the API. For the React dashboard run `npm run dev` in frontend/,
+or `npm run build` once and this will serve the built files.
 """
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.pipeline.bfs_traversal import detect_cycles
-from backend.pipeline.engine import EngineOptions, RulesEngine
-from backend.repository.sqlite_repo import SQLiteRepository
 from backend import server
+from backend.config import DatabaseNotConfigured, settings
+from backend.pipeline.bfs_traversal import detect_cycles
+from backend.pipeline.engine import EngineOptions
 
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 
-    repo, engine = server.boot()
+    try:
+        repo, engine = server.boot()
+    except DatabaseNotConfigured as exc:
+        print("\n" + "=" * 70)
+        print("Cannot start: database not configured")
+        print("=" * 70)
+        print(exc)
+        sys.exit(1)
+
     cycles = detect_cycles(engine.levels())
 
-    print("=" * 68)
-    print("BRAHMO Rules Engine — BFS traversal + 5-check filter")
-    print("=" * 68)
-    print(f"  {repo.total_node_count('supra'):>3} knowledge nodes")
-    print(f"  {len(engine.levels()):>3} hierarchy tiers   "
+    print("=" * 70)
+    print("BRAHMO Rules Engine - BFS traversal + 5-check filter")
+    print("=" * 70)
+    print(f"  database        {repo.backend_name}")
+    print(f"  knowledge nodes {repo.total_node_count(settings.org_id)}")
+    print(f"  hierarchy tiers {len(engine.levels())}  "
           f"{'acyclic OK' if not cycles else 'CYCLES: ' + str(cycles)}")
-    print(f"  {len(repo.list_users()):>3} user profiles")
-    print(f"  {0:>3} LLM calls\n")
+    print(f"  user profiles   {len(repo.list_users())}")
+    print(f"  LLM calls       0\n")
 
     print(f"  {'user':<20}{'entry':<16}{'bfs':>5}{'+z2':>5}{'final':>7}{'ms':>8}")
-    print("  " + "-" * 60)
+    print("  " + "-" * 61)
     for u in repo.list_users():
         r = engine.run(u, EngineOptions())
         print(f"  {u.name:<20}{r.entry_point:<16}"

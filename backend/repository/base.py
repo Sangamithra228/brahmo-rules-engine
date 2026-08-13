@@ -8,6 +8,14 @@ from backend.models import HierarchyLevel, KnowledgeNode, User
 
 
 class Repository(ABC):
+    # Which SQL dialect this store speaks. The engine passes it to
+    # build_predicates so the five checks are written correctly for the
+    # backend without any string translation.
+    dialect: str = "sqlite"
+    # Reported by /health so the UI shows the store actually in use,
+    # not merely the one configured.
+    backend_name: str = "sqlite"
+
     @abstractmethod
     def list_users(self) -> List[User]: ...
 

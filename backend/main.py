@@ -1,146 +1,147 @@
 """
-FastAPI application - the stack the assessment specifies.
-
-Identical routes and identical engine to `backend/server.py`; that one exists
-so the demo can run with zero installs. Use whichever you prefer:
+FastAPI application - the primary backend for the assessment.
 
     pip install -r requirements.txt
     uvicorn backend.main:app --reload --port 8000
 
-    # or, no dependencies at all:
-    python3 -m backend.server 8000
+Database selection is governed by DATABASE_BACKEND (default: supabase).
+See backend/config.py. If Supabase is not configured the app refuses to start
+rather than silently using SQLite.
 """
 
 import os
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from backend.data.seed_data import KNOWLEDGE_NODES
-from backend.derivability.scorer import validate_against_seed
-from backend.models import User
-from backend.pipeline.bfs_traversal import detect_cycles
-from backend.pipeline.engine import EngineOptions, RulesEngine
-from backend.repository.sqlite_repo import SQLiteRepository
+from backend import api
+from backend.config import DatabaseNotConfigured, get_repository, settings
+from backend.pipeline.engine import RulesEngine
 
-FRONTEND = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_DIST = os.path.join(ROOT, "frontend", "dist")
 
 app = FastAPI(
     title="BRAHMO Rules Engine",
-    description="BFS traversal + 5-check filter pipeline. Zero LLM.",
+    description=(
+        "Deterministic knowledge-graph filtering. BFS traversal, Zone 2 "
+        "injection, five sequential checks. Zero LLM, zero runtime embeddings."
+    ),
     version="1.0.0",
 )
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Swap this line for SupabaseRepository() to run against Postgres.
-repo = SQLiteRepository()
-repo.initialise()
-repo.seed()
-engine = RulesEngine(repo)
+repo = get_repository()
+engine = RulesEngine(repo, org_id=settings.org_id)
 
 
-def _opts(zone2: bool, threshold: float, mode: str, audit: bool = False):
-    return EngineOptions(
-        zone2_enabled=zone2,
-        derivability_threshold=threshold,
-        permission_mode=mode,
-        include_audit=audit,
+@app.exception_handler(api.ApiError)
+async def _api_error(_request, exc: api.ApiError):
+    return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+
+class PipelineRequest(BaseModel):
+    user: Optional[str] = None
+    zone2: bool = True
+    threshold: Optional[float] = None
+    mode: Optional[str] = None
+    # An unseen profile can be supplied inline instead of a user id.
+    role: Optional[str] = None
+    department: Optional[str] = None
+    ceiling: Optional[int] = None
+    write_ceiling: Optional[int] = None
+    clearance: Optional[List[str]] = None
+    name: Optional[str] = None
+    org_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------- core API
+@app.get("/health")
+def health():
+    return api.health(repo, engine)
+
+
+@app.get("/users")
+def users():
+    return api.list_users(repo)
+
+
+@app.get("/users/{user_id}")
+def user(user_id: str):
+    return api.get_user(repo, user_id)
+
+
+@app.get("/hierarchy")
+def hierarchy():
+    return api.hierarchy(engine)
+
+
+@app.post("/pipeline/run")
+def pipeline_run(body: PipelineRequest):
+    return api.run_pipeline(repo, engine, body.model_dump(exclude_none=True))
+
+
+@app.get("/pipeline/compare")
+def pipeline_compare(
+    users: str = "U-PRIYA,U-VIKRAM,U-SURESH",
+    zone2: bool = True,
+    threshold: Optional[float] = None,
+    mode: Optional[str] = None,
+):
+    ids = [u.strip() for u in users.split(",") if u.strip()]
+    return api.compare(
+        repo, engine, ids,
+        {"zone2": zone2, "threshold": threshold, "mode": mode},
     )
 
 
-@app.get("/", include_in_schema=False)
-def index():
-    return FileResponse(os.path.join(FRONTEND, "index.html"))
+@app.get("/pipeline/{run_id}")
+def pipeline_get(run_id: str):
+    return api.get_run(run_id)
 
 
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "nodes": repo.total_node_count("supra"),
-        "users": len(repo.list_users()),
-        "graph_acyclic": detect_cycles(engine.levels()) == [],
-        "llm_calls": 0,
-    }
-
-
-@app.get("/api/users")
-def users():
-    return [vars(u) for u in repo.list_users()]
-
-
-@app.get("/api/hierarchy")
-def hierarchy():
-    return [vars(l) for l in engine.levels()]
-
-
-@app.get("/api/pipeline")
-def pipeline(
-    user: str = Query(None),
+# ------------------------------------------------------- operator endpoints
+@app.get("/admin/audit")
+def admin_audit(
+    user: str,
     zone2: bool = True,
-    threshold: float = 0.7,
-    mode: str = "strict",
-    role: str = None,
-    department: str = None,
-    ceiling: int = 10,
-    name: str = "Ad-hoc User",
-    clearance: str = "",
+    threshold: Optional[float] = None,
+    mode: Optional[str] = None,
 ):
-    """Run the pipeline. Pass `user` for a seeded profile, or role/department/
-    ceiling/clearance to push an unseen profile through without writing it to
-    the database - which is how the surprise-user test is demonstrated live."""
-    u = repo.get_user(user) if user else None
-    if u is None and role:
-        u = User(
-            id="U-ADHOC", org_id="supra", name=name, role=role,
-            department=department or "ortho", ceiling_level=ceiling,
-            write_ceiling=None,
-            compliance_clearance=[c for c in clearance.split(",") if c],
-        )
-    if u is None:
-        raise HTTPException(404, "unknown user")
-
-    res = engine.run(u, _opts(zone2, threshold, mode))
-    payload = res.to_public_dict()
-    payload["_demo"] = {"notes": res.notes}
-    return payload
-
-
-@app.get("/api/compare")
-def compare(users: str = "U-PRIYA,U-VIKRAM,U-SURESH", zone2: bool = True,
-            threshold: float = 0.7, mode: str = "strict"):
-    out = []
-    for uid in [x.strip() for x in users.split(",") if x.strip()]:
-        u = repo.get_user(uid)
-        if u:
-            out.append(engine.run(u, _opts(zone2, threshold, mode)).to_public_dict())
-    return out
-
-
-@app.get("/api/audit")
-def audit(user: str, zone2: bool = True, threshold: float = 0.7,
-          mode: str = "strict"):
     """Operator-only. Explains every exclusion.
 
-    Deliberately a SEPARATE endpoint: merging this into /api/pipeline would
-    destroy silent exclusion, because the caller could count what was removed.
-    In production this sits behind an operator role and writes to audit_log.
+    Deliberately separate from /pipeline/run: merging the two would end silent
+    exclusion, because a caller could count what was removed. In production
+    this sits behind an operator role.
     """
-    u = repo.get_user(user)
-    if not u:
-        raise HTTPException(404, "unknown user")
-    return engine.run(u, _opts(zone2, threshold, mode, audit=True)).to_audit_dict()
+    return api.audit(
+        repo, engine,
+        {"user": user, "zone2": zone2, "threshold": threshold, "mode": mode},
+    )
 
 
-@app.get("/api/derivability")
-def derivability():
-    v = validate_against_seed(KNOWLEDGE_NODES)
-    return {
-        "threshold": v["threshold"],
-        "agreement": v["agreement"],
-        "total": v["total"],
-        "disagreements": v["disagreements"],
-    }
+@app.get("/admin/derivability")
+def admin_derivability():
+    return api.derivability_report()
+
+
+# ------------------------------------------------------------ static build
+if os.path.isdir(FRONTEND_DIST):
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")),
+        name="assets",
+    )
+
+    @app.get("/", include_in_schema=False)
+    def index():
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
