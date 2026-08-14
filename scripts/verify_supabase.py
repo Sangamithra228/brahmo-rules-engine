@@ -15,18 +15,22 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.config import (  # noqa: E402
-    DatabaseNotConfigured, get_repository, project_ref, resolve_db_url, settings,
+    DatabaseNotConfigured, get_repository, resolve_db_url, settings,
 )
 
 EXPECTED = {"knowledge nodes": 50, "users": 7, "hierarchy tiers": 20}
 
 
 def mask(dsn: str) -> str:
-    """postgresql://user:secret@host/db -> postgresql://user:***@host/db"""
+    """postgresql://user:secret@host/db -> postgresql://user:***@host/db
+
+    The password is never printed. Split on the LAST '@' so a password
+    containing an unencoded '@' cannot expose part of itself.
+    """
     if "@" not in dsn or "//" not in dsn:
         return "(not set)"
     scheme, rest = dsn.split("//", 1)
-    creds, host = rest.split("@", 1)
+    creds, host = rest.rsplit("@", 1)
     user = creds.split(":", 1)[0]
     return f"{scheme}//{user}:***@{host}"
 
@@ -35,12 +39,21 @@ def main() -> int:
     print("=" * 66)
     print("Supabase connection check")
     print("=" * 66)
+    dsn = resolve_db_url(settings)
     print(f"  DATABASE_BACKEND   {settings.backend}")
     print(f"  SUPABASE_URL       {settings.supabase_url or '(not set)'}")
-    print(f"  project ref        {project_ref(settings.supabase_url) or '(none)'}")
     print(f"  anon key           {'set' if settings.supabase_anon_key else '(not set)'}"
           "   (not used to read data - see README)")
-    print(f"  connection string  {mask(resolve_db_url(settings))}")
+    print(f"  connection string  {mask(dsn)}")
+    if "REPLACE_WITH_YOUR_DB_PASSWORD" in dsn:
+        print("\n  SUPABASE_DB_URL still contains the placeholder password.")
+        print("  Edit .env and substitute your database password.")
+        return 1
+    if "pooler.supabase.com" in dsn:
+        print("  connection type    Session Pooler (IPv4-proxied)")
+    elif dsn.startswith("postgresql://") and ".supabase.co" in dsn:
+        print("  connection type    direct (IPv6-only on current projects;")
+        print("                     use the Session Pooler URI on IPv4)")
     print()
 
     if settings.backend != "supabase":
@@ -63,8 +76,11 @@ def main() -> int:
     except Exception as exc:  # connection refused, bad password, DNS, ...
         print(f"  CONNECTION FAILED: {type(exc).__name__}")
         print(f"  {exc}")
-        print("\n  If the host does not resolve, use the Session pooler URI")
-        print("  from Project Settings -> Database -> Connection string.")
+        print("\n  'failed to resolve host' usually means the DIRECT host was")
+        print("  used on an IPv4 network. Use the Session Pooler URI from")
+        print("  Project Settings -> Database -> Connection string.")
+        print("  'password authentication failed' with a correct password")
+        print("  usually means an unencoded @ : / or # in the URI.")
         return 1
 
     print("  Connected.\n")

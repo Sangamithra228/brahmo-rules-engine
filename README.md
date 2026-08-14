@@ -114,21 +114,30 @@ sufficient — a database credential is required as well. The anon key is
 recorded in configuration but is **not** used to read data, and it is never
 sent to the browser.
 
-Supply **one** of:
+Set **`SUPABASE_DB_URL`** to the complete connection string from Project
+Settings → Database → Connection string → URI. Nothing is derived from
+`SUPABASE_URL`; the DSN is used exactly as given.
 
-- `SUPABASE_DB_PASSWORD` — your database password. The connection string is
-  derived from `SUPABASE_URL` automatically. *(simplest)*
-- `SUPABASE_DB_URL` — the full URI from Project Settings → Database →
-  Connection string. Use the **Session pooler** URI if your network cannot
-  resolve `db.<ref>.supabase.co`.
+On an **IPv4 network use the Session Pooler string**, which Supabase proxies
+over IPv4:
+
+```
+postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
+
+The direct `db.<project-ref>.supabase.co` host is IPv6-only on current
+projects and fails with `failed to resolve host` on IPv4-only networks.
+
+If your password contains `@ : / #`, percent-encode it in the URI
+(`@`→`%40`, `:`→`%3A`, `/`→`%2F`, `#`→`%23`); otherwise it silently corrupts
+the DSN and surfaces as an authentication failure.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_BACKEND` | `supabase` | `supabase` or `sqlite` |
 | `SUPABASE_URL` | — | `https://<ref>.supabase.co` |
 | `SUPABASE_ANON_KEY` | — | Publishable/anon key. Recorded, not used to read data |
-| `SUPABASE_DB_PASSWORD` | — | Database password; DSN derived from `SUPABASE_URL` |
-| `SUPABASE_DB_URL` | — | Full connection URI. Overrides the derived one |
+| `SUPABASE_DB_URL` | — | **Complete** PostgreSQL DSN, used verbatim. Session Pooler URI on IPv4 |
 | `BRAHMO_ORG_ID` | `supra` | Tenant |
 | `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff (dashboard shows it read-only) |
 | `BRAHMO_PERMISSION_MODE` | `strict` | Internal; the dashboard exposes no selector |

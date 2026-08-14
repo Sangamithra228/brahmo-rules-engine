@@ -25,19 +25,17 @@ class TestDatabaseConfiguration(unittest.TestCase):
     def test_supabase_without_credentials_fails_loudly(self):
         """It must not quietly fall back to SQLite - a demo run against the
         wrong database is worse than one that refuses to start."""
-        saved = (settings.supabase_db_url, settings.supabase_db_password)
+        saved = settings.supabase_db_url
         settings.supabase_db_url = ""
-        settings.supabase_db_password = ""
         try:
             with self.assertRaises(DatabaseNotConfigured) as ctx:
                 get_repository("supabase")
             msg = str(ctx.exception)
             self.assertIn("SUPABASE_DB_URL", msg)
-            self.assertIn("SUPABASE_DB_PASSWORD", msg)
             self.assertIn("DATABASE_BACKEND=sqlite", msg,
                           "the error should tell the reader how to run offline")
         finally:
-            settings.supabase_db_url, settings.supabase_db_password = saved
+            settings.supabase_db_url = saved
 
     def test_sqlite_fallback_requires_an_explicit_opt_in(self):
         repo = get_repository("sqlite")
@@ -298,11 +296,22 @@ class TestRuleOverridesAreNotCallerControllable(unittest.TestCase):
 
 
 class TestSupabaseConnectionResolution(unittest.TestCase):
-    """The DSN psycopg needs, derived without hardcoding anything."""
+    """The DSN is taken verbatim from SUPABASE_DB_URL.
+
+    Nothing is constructed from SUPABASE_URL: db.<ref>.supabase.co is the
+    direct connection, which is IPv6-only on current Supabase projects and
+    does not resolve on IPv4 networks. Accepting the whole DSN lets the
+    IPv4-proxied Session Pooler host be used unchanged.
+    """
+
+    # Synthetic: fake project ref, fake password, placeholder region.
+    POOLER = (
+        "postgresql://postgres.abc123:pw"
+        "@aws-0-example-region.pooler.supabase.com:5432/postgres"
+    )
 
     class Cfg:
         supabase_url = ""
-        supabase_db_password = ""
         supabase_db_url = ""
 
     def cfg(self, **kw):
@@ -311,55 +320,44 @@ class TestSupabaseConnectionResolution(unittest.TestCase):
             setattr(c, k, v)
         return c
 
-    def test_project_ref_is_parsed_from_the_project_url(self):
-        from backend.config import project_ref
+    def test_dsn_is_returned_verbatim(self):
+        from backend.config import resolve_db_url
         self.assertEqual(
-            project_ref("https://abc123xyz.supabase.co"), "abc123xyz")
-        self.assertEqual(
-            project_ref("https://abc123xyz.supabase.co/"), "abc123xyz")
-        self.assertEqual(project_ref(""), "")
+            resolve_db_url(self.cfg(supabase_db_url=self.POOLER)), self.POOLER)
 
-    def test_dsn_is_derived_from_url_plus_password(self):
+    def test_session_pooler_host_survives_untouched(self):
+        """The pooler host, port and dotted username must not be rewritten."""
+        from backend.config import resolve_db_url
+        dsn = resolve_db_url(self.cfg(supabase_db_url=self.POOLER))
+        self.assertIn("pooler.supabase.com", dsn)
+        self.assertIn(":5432/postgres", dsn)
+        self.assertIn("postgres.abc123", dsn)
+
+    def test_host_is_never_constructed_from_the_project_url(self):
+        """Even with SUPABASE_URL set, no direct host may be invented."""
         from backend.config import resolve_db_url
         dsn = resolve_db_url(
-            self.cfg(supabase_url="https://abc.supabase.co",
-                     supabase_db_password="hunter2"))
-        self.assertEqual(
-            dsn, "postgresql://postgres:hunter2@db.abc.supabase.co:5432/postgres")
+            self.cfg(supabase_url="https://abc123.supabase.co",
+                     supabase_db_url=self.POOLER))
+        self.assertNotIn("db.abc123.supabase.co", dsn)
+        self.assertEqual(dsn, self.POOLER)
 
-    def test_password_special_characters_are_url_encoded(self):
-        """An unencoded '@' or '/' in a password silently corrupts the DSN."""
-        from backend.config import resolve_db_url
-        dsn = resolve_db_url(
-            self.cfg(supabase_url="https://abc.supabase.co",
-                     supabase_db_password="p@ss/w:rd"))
-        self.assertIn("p%40ss%2Fw%3Ard", dsn)
-        self.assertEqual(dsn.count("@"), 1, "host separator must stay unique")
-
-    def test_explicit_db_url_takes_precedence(self):
-        """Needed for the Session pooler URI on IPv6-restricted networks."""
-        from backend.config import resolve_db_url
-        explicit = "postgresql://postgres.abc:pw@aws-0-x.pooler.supabase.com:6543/postgres"
-        self.assertEqual(
-            resolve_db_url(self.cfg(supabase_url="https://abc.supabase.co",
-                                    supabase_db_password="ignored",
-                                    supabase_db_url=explicit)),
-            explicit)
-
-    def test_no_credential_yields_no_dsn(self):
+    def test_no_dsn_configured_yields_empty(self):
         from backend.config import resolve_db_url
         self.assertEqual(
             resolve_db_url(self.cfg(supabase_url="https://abc.supabase.co")), "")
 
-    def test_anon_key_is_not_used_to_build_the_connection(self):
-        """The publishable key addresses PostgREST; it must never end up in a
-        psycopg connection string."""
+    def test_config_no_longer_builds_a_direct_host(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parents[1] / "config.py").read_text()
+        code = "\n".join(line.split("#")[0] for line in src.split("\n"))
+        self.assertNotIn("db.{ref}", code)
+        self.assertNotIn('f"postgresql://postgres:', code)
+
+    def test_anon_key_is_never_part_of_the_connection(self):
         from backend.config import resolve_db_url
-        dsn = resolve_db_url(
-            self.cfg(supabase_url="https://abc.supabase.co",
-                     supabase_db_password="pw"))
+        dsn = resolve_db_url(self.cfg(supabase_db_url=self.POOLER))
         self.assertNotIn("sb_publishable", dsn)
-        self.assertNotIn("anon", dsn)
 
     def test_no_real_credential_is_committed_to_source(self):
         import pathlib
@@ -367,3 +365,5 @@ class TestSupabaseConnectionResolution(unittest.TestCase):
         for name in ["README.md", ".env.example", "backend/config.py"]:
             text = (root / name).read_text()
             self.assertNotIn("sb_publishable_", text, name)
+            self.assertNotIn("pooler.supabase.com:5432/postgres", text.replace(
+                "aws-0-<region>.pooler.supabase.com:5432/postgres", ""), name)

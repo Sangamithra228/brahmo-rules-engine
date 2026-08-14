@@ -51,7 +51,8 @@ class Settings:
     # reference can be derived and reported.
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
-    supabase_db_password = os.environ.get("SUPABASE_DB_PASSWORD", "")
+    # The complete PostgreSQL DSN, including credentials. This is the only
+    # source of connection details; nothing is derived from SUPABASE_URL.
     supabase_db_url = os.environ.get("SUPABASE_DB_URL", "")
     sqlite_path = os.environ.get("SQLITE_PATH") or None
 
@@ -80,20 +81,16 @@ def project_ref(url: str) -> str:
 
 
 def resolve_db_url(cfg) -> str:
-    """The connection string psycopg needs.
+    """The connection string psycopg needs: taken verbatim from
+    SUPABASE_DB_URL.
 
-    SUPABASE_DB_URL wins if set. Otherwise it is built from the project
-    reference in SUPABASE_URL plus SUPABASE_DB_PASSWORD, so the common case
-    needs one secret rather than a hand-assembled DSN.
+    The host is NOT constructed from SUPABASE_URL. Building
+    db.<ref>.supabase.co assumes the direct connection, which is IPv6-only on
+    current Supabase projects and fails to resolve on IPv4 networks. Supplying
+    the whole DSN lets the Session Pooler host (IPv4-proxied) be used without
+    the application knowing anything about Supabase's hostname scheme.
     """
-    if cfg.supabase_db_url:
-        return cfg.supabase_db_url
-    ref = project_ref(cfg.supabase_url)
-    if ref and cfg.supabase_db_password:
-        from urllib.parse import quote
-        pwd = quote(cfg.supabase_db_password, safe="")
-        return f"postgresql://postgres:{pwd}@db.{ref}.supabase.co:5432/postgres"
-    return ""
+    return cfg.supabase_db_url
 
 
 settings = Settings()
@@ -113,13 +110,20 @@ enough: a database credential is required.
        supabase/seed.sql
        supabase/rls_policies.sql   (optional, defence in depth)
   2. cp .env.example .env   (Windows: copy .env.example .env)
-  3. Supply ONE of:
-       SUPABASE_DB_PASSWORD  - your database password; the connection string
-                               is then derived from SUPABASE_URL
-       SUPABASE_DB_URL       - the full URI, from
-                               Project Settings -> Database -> Connection string
-     Use SUPABASE_DB_URL with the Session pooler URI if your network is
-     IPv6-restricted and db.<ref>.supabase.co does not resolve.
+  3. Set SUPABASE_DB_URL to the complete connection string from
+       Project Settings -> Database -> Connection string -> URI
+
+     On an IPv4 network use the SESSION POOLER string, which Supabase
+     proxies over IPv4. It looks like:
+
+       postgresql://postgres.<project-ref>:<password>
+         @aws-0-<region>.pooler.supabase.com:5432/postgres
+
+     The direct db.<ref>.supabase.co host is IPv6-only on current projects
+     and will fail to resolve on an IPv4-only network.
+
+     If the password contains @ : / or #, percent-encode it in the URI
+     (@ -> %40, : -> %3A, / -> %2F, # -> %23).
   4. pip install "psycopg[binary]"
   5. Verify:  python scripts/verify_supabase.py
 
@@ -156,8 +160,7 @@ def get_repository(backend: str = None, auto_seed_sqlite: bool = True):
         dsn = resolve_db_url(settings)
         if not dsn:
             raise DatabaseNotConfigured(
-                "No database credential found: set SUPABASE_DB_PASSWORD "
-                "(with SUPABASE_URL) or SUPABASE_DB_URL." + SUPABASE_SETUP_HELP
+                "SUPABASE_DB_URL is not set." + SUPABASE_SETUP_HELP
             )
         try:
             import psycopg  # noqa: F401
