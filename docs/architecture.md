@@ -317,6 +317,17 @@ The graph is declared acyclic, so a cycle is a bug, not a case to tolerate.
    Postgres trigger using a recursive CTE. Rejecting at the door beats
    detecting at query time.
 
+## Decision 14 — errors are a security surface
+
+Both servers answer unhandled exceptions with a generic body and log the
+detail. `api.ApiError` carries deliberate, caller-safe messages ("no user
+'X'"); everything else becomes `Internal server error`.
+
+The reason is silent exclusion. If a malformed query produced a 500 whose body
+quoted the failing SQL, a caller could learn about rows and columns the
+pipeline is meant to hide — the same information the candidate response is
+careful not to reveal, leaking through the error channel instead.
+
 ## Decision 13 — org-wide scope is a role grant, not a traversal
 
 Three seeded users — the Pharmacist, the QA officer and the Admin — belong to

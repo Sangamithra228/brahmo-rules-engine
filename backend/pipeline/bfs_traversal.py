@@ -28,7 +28,7 @@ checks then run as SQL over that set.
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from backend.models import HierarchyLevel
 

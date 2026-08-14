@@ -28,7 +28,6 @@ async function request(path, options = {}) {
 
 export const getHealth = () => request('/health')
 export const getUsers = () => request('/users')
-export const getUser = (id) => request(`/users/${encodeURIComponent(id)}`)
 export const getHierarchy = () => request('/hierarchy')
 
 /**
@@ -41,8 +40,6 @@ export const getHierarchy = () => request('/hierarchy')
  */
 export const runPipeline = (body) =>
   request('/pipeline/run', { method: 'POST', body: JSON.stringify(body) })
-
-export const getRun = (runId) => request(`/pipeline/${runId}`)
 
 export const comparePipelines = (userIds, opts = {}) => {
   const q = new URLSearchParams({ users: userIds.join(',') })

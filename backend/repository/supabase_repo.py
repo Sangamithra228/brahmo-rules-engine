@@ -12,9 +12,8 @@ The predicates are shared - the only dialect differences are:
   * placeholders are %s rather than ?.
 """
 
-import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from backend.models import HierarchyLevel, KnowledgeNode, User
 from backend.repository.base import Repository

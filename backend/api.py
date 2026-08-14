@@ -16,7 +16,7 @@ from backend.derivability.scorer import validate_against_seed
 from backend.models import User
 from backend.pipeline.bfs_traversal import detect_cycles, traverse
 from backend.pipeline.entry_point_resolver import resolve_entry_point
-from backend.pipeline.engine import EngineOptions, RulesEngine
+from backend.pipeline.engine import EngineOptions
 from backend.pipeline.permission_compiler import compile_permissions
 
 # Recent runs, so GET /pipeline/{run_id} can return a completed run without

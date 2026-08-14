@@ -20,6 +20,7 @@ Routes match FastAPI:
 """
 
 import json
+import logging
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,8 +29,10 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import api
-from backend.config import DatabaseNotConfigured, get_repository, settings
+from backend.config import get_repository, settings
 from backend.pipeline.engine import RulesEngine
+
+log = logging.getLogger("brahmo")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "frontend", "dist")
@@ -120,9 +123,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"detail": "not found"})
 
         except api.ApiError as exc:
+            # Deliberate, caller-safe messages only.
             return self._send(exc.status, {"detail": exc.message})
-        except Exception as exc:  # noqa: BLE001
-            return self._send(500, {"detail": str(exc)})
+        except Exception:  # noqa: BLE001
+            # Never return the exception text: it can carry SQL fragments,
+            # file paths, or the content of rows the caller may not see.
+            log.exception("unhandled error on %s", path)
+            return self._send(500, {"detail": "Internal server error"})
 
     def _serve_index(self):
         built = os.path.join(DIST, "index.html")

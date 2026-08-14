@@ -201,3 +201,45 @@ class TestApiLayer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestErrorHandling(unittest.TestCase):
+    """Errors must be useful without becoming a side channel."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo, cls.eng = engine()
+
+    def test_api_errors_carry_only_deliberate_messages(self):
+        with self.assertRaises(api.ApiError) as ctx:
+            api.get_user(self.repo, "U-NOBODY")
+        msg = str(ctx.exception).lower()
+        self.assertEqual(ctx.exception.status, 404)
+        for leaky in ["select", "sqlite", "postgres", "traceback",
+                      "/home/", "c:\\", ".py"]:
+            self.assertNotIn(leaky, msg)
+
+    def test_unhandled_errors_return_a_generic_body(self):
+        """The 500 path must not echo the exception. A raw body can carry SQL
+        fragments or row content the caller is not cleared to see.
+
+        Read from disk rather than importing, so this holds even where FastAPI
+        is not installed."""
+        import pathlib
+
+        backend_dir = pathlib.Path(__file__).resolve().parents[1]
+        for name in ("server.py", "main.py"):
+            src = (backend_dir / name).read_text()
+            self.assertIn("Internal server error", src, name)
+            self.assertNotIn('{"detail": str(exc)}', src, name)
+            self.assertNotIn("str(exc)}", src, name)
+
+    def test_missing_profile_is_rejected_before_the_pipeline_runs(self):
+        with self.assertRaises(api.ApiError) as ctx:
+            api.run_pipeline(self.repo, self.eng, {})
+        self.assertEqual(ctx.exception.status, 400)
+
+    def test_bad_run_id_is_a_404_not_a_key_error(self):
+        with self.assertRaises(api.ApiError) as ctx:
+            api.get_run("does-not-exist")
+        self.assertEqual(ctx.exception.status, 404)

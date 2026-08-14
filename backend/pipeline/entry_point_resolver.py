@@ -25,7 +25,7 @@ Fallbacks, in order:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from backend.models import HierarchyLevel
 from backend.pipeline.permission_compiler import CompiledPermissions

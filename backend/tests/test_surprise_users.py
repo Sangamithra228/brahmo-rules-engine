@@ -102,7 +102,6 @@ class TestSurpriseUsers(unittest.TestCase):
         the graph, so a new tier is traversed the moment it exists in the
         database - nothing in the source names a department."""
         import json
-        from backend.models import HierarchyLevel
 
         self.repo._conn.execute(
             "INSERT OR REPLACE INTO hierarchy_levels "

@@ -68,7 +68,7 @@ itself, is in [`docs/architecture.md`](docs/architecture.md).
 | Database | Supabase / PostgreSQL (**primary**), SQLite (offline fallback) |
 | Backend | Python 3.11+, FastAPI |
 | Frontend | React 18, Vite, Tailwind CSS |
-| Tests | `unittest`, 108 tests, standard library only |
+| Tests | `unittest`, 121 tests, standard library only |
 
 The React frontend is real (Vite + React 18 + Tailwind, source in
 `frontend/src`). It has **not been built or linted in this environment** — see
@@ -162,7 +162,7 @@ instructions rather than silently using the wrong database.
 python -m unittest discover -s backend/tests -t .
 ```
 
-108 tests, no dependencies. They run against the SQLite fallback, so the
+121 tests, no dependencies. They run against the SQLite fallback, so the
 PostgreSQL dialect is verified by asserting on the SQL the builder emits
 rather than by executing it. Coverage:
 
@@ -176,6 +176,7 @@ rather than by executing it. Coverage:
 | Expired / superseded nodes, compression hints | `test_temporal_and_metadata.py` |
 | API surface, database config, SQL dialects, sequential execution | `test_api_and_config.py` |
 | Derivability scorer calibration | `test_derivability.py` |
+| Multi-tenant isolation, Zone 2 de-duplication, error handling | `test_isolation_and_injection.py` |
 
 ---
 
@@ -228,6 +229,17 @@ bypasses the API and queries the database directly?"
 Check 5 is deliberately **not** in RLS: derivability is a relevance judgement,
 not access control, and Postgres should not refuse an administrator a node
 purely for being obvious.
+
+**Errors reveal nothing.** Unhandled exceptions are logged server-side and
+answered with a generic `Internal server error`. An echoed exception body can
+carry SQL fragments, file paths, or the content of rows the caller is not
+cleared to see, which would defeat silent exclusion through the error channel.
+
+**Isolation is verified against a real second tenant.** The supplied seed data
+has one organization, so `org_id = ?` matched everything and check 1 could
+never be observed working. The test suite inserts a rival tenant with nodes
+planted on tiers Supra users genuinely traverse, and asserts that no user —
+including the administrator — ever receives one.
 
 **Nothing is hardcoded per user.** Role behaviour lives in a declarative table
 (`backend/policy/role_policy.py`). There is no `if user == "Priya"` anywhere;

@@ -4,7 +4,7 @@ Supabase, so swapping the store is a constructor change."""
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.models import HierarchyLevel, KnowledgeNode, User
+from backend.models import HierarchyLevel, User
 
 
 class Repository(ABC):

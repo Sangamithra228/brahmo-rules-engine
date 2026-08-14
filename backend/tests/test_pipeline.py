@@ -2,7 +2,6 @@ import hashlib
 import json
 import unittest
 
-from backend.models import User
 from backend.pipeline.engine import EngineOptions
 from backend.tests.conftest_helper import engine
 

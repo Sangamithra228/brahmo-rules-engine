@@ -9,18 +9,21 @@ See backend/config.py. If Supabase is not configured the app refuses to start
 rather than silently using SQLite.
 """
 
+import logging
 import os
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend import api
-from backend.config import DatabaseNotConfigured, get_repository, settings
+from backend.config import get_repository, settings
 from backend.pipeline.engine import RulesEngine
+
+log = logging.getLogger("brahmo")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIST = os.path.join(ROOT, "frontend", "dist")
@@ -47,6 +50,18 @@ engine = RulesEngine(repo, org_id=settings.org_id)
 @app.exception_handler(api.ApiError)
 async def _api_error(_request, exc: api.ApiError):
     return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+
+@app.exception_handler(Exception)
+async def _unhandled(_request, exc: Exception):
+    """Log the detail, return none of it.
+
+    A raw exception body can leak SQL fragments, file paths, or the content of
+    rows the caller is not cleared to see - which would undo silent exclusion
+    through the error channel.
+    """
+    log.exception("unhandled error", exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 class PipelineRequest(BaseModel):

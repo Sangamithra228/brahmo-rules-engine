@@ -49,6 +49,11 @@ They are needed because the supplied dataset contains no node with an expiry
 date and only six departments, so the `valid_until` path and the
 new-department path have nothing to exercise otherwise.
 
+`test_isolation_and_injection.py` additionally creates a second organization
+("Rival Hospital") with three nodes, so that check 1 can be observed excluding
+a genuine foreign tenant rather than trivially passing. It is removed in
+`tearDownClass`.
+
 **None of these are added to `backend/data/seed_data.py`.** The assessment
 dataset is used exactly as supplied: 50 nodes, 7 users, 20 tiers, 10 edges.
 
