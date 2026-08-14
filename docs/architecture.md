@@ -250,7 +250,8 @@ checks belong in RLS, quality checks belong in the pipeline.
 `PipelineResult` has two serialisers. `to_public_dict()` returns the candidate
 set and the funnel and nothing else: no removed count, no placeholder rows, no
 403, no "3 nodes restricted". `to_audit_dict()` explains every exclusion and
-is reachable only via `/api/audit`, which is operator-gated.
+is reachable only via `/admin/audit`, which is gated: loopback-only by
+default, or `X-Admin-Token` when `BRAHMO_ADMIN_TOKEN` is set. See Decision 15.
 
 They are separate methods rather than one method with a flag, because a flag
 is one careless `if` away from leaking. `test_public_response_reveals_nothing_
@@ -316,6 +317,28 @@ The graph is declared acyclic, so a cycle is a bug, not a case to tolerate.
    before insert, and `supabase/schema.sql` carries the same guard as a
    Postgres trigger using a recursive CTE. Rejecting at the door beats
    detecting at query time.
+
+## Decision 15 — the audit trail is the thing most worth gating
+
+`/admin/audit` returns the ids and titles of every node a user did not
+receive. That is a more direct disclosure than anything the pipeline itself
+can leak: it is the withheld set, enumerated. An unauthenticated audit route
+would make silent exclusion decorative.
+
+Default posture is loopback-only, so the local demo needs no configuration
+while a remote caller gets nothing. Setting `BRAHMO_ADMIN_TOKEN` promotes this
+to a header check from every host, including localhost, which is what a
+deployed instance requires.
+
+Refusals are `404`, not `403`. A `403` says "this exists and you may not have
+it", which is the same shape of disclosure silent exclusion exists to prevent;
+a `404` says nothing at all. `/health` publishes
+`admin_api_token_required` so an operator can see the posture without
+guessing at it.
+
+CORS was previously `["*"]`. With an open audit route that meant any website
+could read the withheld set out of a logged-in browser. Origins are now an
+explicit, configurable list.
 
 ## Decision 14 — errors are a security surface
 

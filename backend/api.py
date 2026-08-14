@@ -25,6 +25,28 @@ _RUNS: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _MAX_RUNS = 50
 
 
+LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def require_admin(client_host: str = None, token: str = None) -> None:
+    """Guard the /admin routes.
+
+    Raises 404 rather than 401/403 on purpose: a 403 confirms the endpoint
+    exists and that there is something behind it, which is the same shape of
+    disclosure silent exclusion exists to prevent.
+    """
+    if settings.admin_token:
+        if token != settings.admin_token:
+            raise ApiError(404, "not found")
+        return
+    if (client_host or "").split("%")[0] not in LOOPBACK:
+        raise ApiError(404, "not found")
+
+
+def admin_is_protected() -> bool:
+    return bool(settings.admin_token)
+
+
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -75,6 +97,10 @@ def health(repo, engine) -> Dict[str, Any]:
         "graph_acyclic": detect_cycles(engine.levels()) == [],
         "llm_calls": 0,
         "embedding_calls": 0,
+        # False means the admin routes are loopback-only rather than
+        # token-protected. Any non-local deployment should set
+        # BRAHMO_ADMIN_TOKEN.
+        "admin_api_token_required": admin_is_protected(),
     }
 
 

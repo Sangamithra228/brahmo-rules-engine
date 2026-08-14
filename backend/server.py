@@ -65,8 +65,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        origin = self.headers.get("Origin")
+        if origin in settings.cors_origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, X-Admin-Token")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.end_headers()
         if self.command != "HEAD":
@@ -112,10 +115,16 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/pipeline/"):
                 return self._send(200, api.get_run(path.split("/")[2]))
 
-            if path == "/admin/audit":
-                return self._send(200, api.audit(_repo, _engine, params))
-            if path == "/admin/derivability":
-                return self._send(200, api.derivability_report())
+            if path.startswith("/admin/"):
+                api.require_admin(
+                    self.client_address[0] if self.client_address else None,
+                    self.headers.get("X-Admin-Token"),
+                )
+                if path == "/admin/audit":
+                    return self._send(200, api.audit(_repo, _engine, params))
+                if path == "/admin/derivability":
+                    return self._send(200, api.derivability_report())
+                return self._send(404, {"detail": "not found"})
 
             if path.startswith("/assets/"):
                 return self._serve_asset(path)

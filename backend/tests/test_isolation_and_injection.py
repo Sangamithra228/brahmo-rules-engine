@@ -155,3 +155,69 @@ class TestZone2Injection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAdminEndpointGate(unittest.TestCase):
+    """The exclusion trail names the nodes the pipeline withheld, so the
+    /admin routes must not be readable by anyone who can reach the API."""
+
+    def setUp(self):
+        from backend.config import settings
+        self._saved = settings.admin_token
+        settings.admin_token = ""
+
+    def tearDown(self):
+        from backend.config import settings
+        settings.admin_token = self._saved
+
+    def test_loopback_is_allowed_so_the_local_demo_works(self):
+        from backend import api
+        api.require_admin("127.0.0.1")
+        api.require_admin("::1")
+
+    def test_remote_client_is_refused_when_no_token_is_configured(self):
+        from backend import api
+        with self.assertRaises(api.ApiError) as ctx:
+            api.require_admin("203.0.113.9")
+        self.assertEqual(ctx.exception.status, 404)
+
+    def test_refusal_is_404_not_403(self):
+        """A 403 would confirm the endpoint exists and has something behind
+        it - the same disclosure silent exclusion prevents."""
+        from backend import api
+        with self.assertRaises(api.ApiError) as ctx:
+            api.require_admin("203.0.113.9")
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertNotIn("forbidden", ctx.exception.message.lower())
+        self.assertNotIn("admin", ctx.exception.message.lower())
+
+    def test_token_is_required_from_every_host_once_configured(self):
+        from backend import api
+        from backend.config import settings
+        settings.admin_token = "s3cret"
+        with self.assertRaises(api.ApiError):
+            api.require_admin("127.0.0.1")           # loopback no longer enough
+        with self.assertRaises(api.ApiError):
+            api.require_admin("127.0.0.1", "wrong")
+        api.require_admin("203.0.113.9", "s3cret")   # correct header passes
+
+    def test_health_reports_whether_the_admin_api_is_token_protected(self):
+        from backend import api
+        from backend.config import settings
+        repo, eng = engine()
+        self.assertFalse(api.health(repo, eng)["admin_api_token_required"])
+        settings.admin_token = "s3cret"
+        self.assertTrue(api.health(repo, eng)["admin_api_token_required"])
+
+    def test_cors_does_not_allow_a_wildcard_origin(self):
+        """A wildcard would let any website read the trail from a browser."""
+        from backend.config import settings
+        self.assertNotIn("*", settings.cors_origins)
+        self.assertTrue(all(o.startswith("http") for o in settings.cors_origins))
+
+    def test_normal_pipeline_endpoint_is_not_gated(self):
+        """The gate must not break the demo path."""
+        repo, eng = engine()
+        from backend import api
+        r = api.run_pipeline(repo, eng, {"user": "U-PRIYA"})
+        self.assertGreater(len(r["candidate_set"]), 0)

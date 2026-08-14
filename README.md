@@ -68,7 +68,7 @@ itself, is in [`docs/architecture.md`](docs/architecture.md).
 | Database | Supabase / PostgreSQL (**primary**), SQLite (offline fallback) |
 | Backend | Python 3.11+, FastAPI |
 | Frontend | React 18, Vite, Tailwind CSS |
-| Tests | `unittest`, 121 tests, standard library only |
+| Tests | `unittest`, 128 tests, standard library only |
 
 The React frontend is real (Vite + React 18 + Tailwind, source in
 `frontend/src`). It has **not been built or linted in this environment** — see
@@ -110,6 +110,8 @@ Set `SUPABASE_DB_URL` in `.env`. `DATABASE_BACKEND` defaults to `supabase`.
 | `BRAHMO_ORG_ID` | `supra` | Tenant |
 | `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff (configuration only; the dashboard displays it read-only) |
 | `BRAHMO_PERMISSION_MODE` | `strict` | Internal; the dashboard exposes no selector |
+| `BRAHMO_ADMIN_TOKEN` | _unset_ | When set, `/admin` requires an `X-Admin-Token` header. Unset = loopback only |
+| `BRAHMO_CORS_ORIGINS` | localhost:5173, localhost:8000 | Comma-separated allowed origins |
 
 `.env` is gitignored. No credentials are committed anywhere in this repo.
 
@@ -162,7 +164,7 @@ instructions rather than silently using the wrong database.
 python -m unittest discover -s backend/tests -t .
 ```
 
-121 tests, no dependencies. They run against the SQLite fallback, so the
+128 tests, no dependencies. They run against the SQLite fallback, so the
 PostgreSQL dialect is verified by asserting on the SQL the builder emits
 rather than by executing it. Coverage:
 
@@ -176,7 +178,7 @@ rather than by executing it. Coverage:
 | Expired / superseded nodes, compression hints | `test_temporal_and_metadata.py` |
 | API surface, database config, SQL dialects, sequential execution | `test_api_and_config.py` |
 | Derivability scorer calibration | `test_derivability.py` |
-| Multi-tenant isolation, Zone 2 de-duplication, error handling | `test_isolation_and_injection.py` |
+| Multi-tenant isolation, Zone 2 de-duplication, admin gate | `test_isolation_and_injection.py` |
 
 ---
 
@@ -222,13 +224,29 @@ appears in the traversal payload.
 **Filtering happens in the database.** Checks 1–4 execute as progressive SQL
 `WHERE` clauses, so restricted rows are never read on the user's behalf and
 never cross the network (GAP 5). Only the final survivors have their content
-fetched. `supabase/rls_policies.sql` pushes the same four checks into
-Row-Level Security as defence in depth — the answer to "what if someone
-bypasses the API and queries the database directly?"
+fetched. `supabase/rls_policies.sql` carries isolation, compliance,
+permission and temporal into Row-Level Security as defence in depth — the
+answer to "what if someone bypasses the API and queries the database
+directly?" The RLS compliance policy is a deliberate simplification: it tests
+the flattened clearance list, where the application additionally scopes a
+HOD's implicit MNPI to their own department. RLS is a floor for direct
+database access, not an exact mirror of the pipeline, and it has not been run
+against a live instance — see *Known tradeoffs*.
 
 Check 5 is deliberately **not** in RLS: derivability is a relevance judgement,
 not access control, and Postgres should not refuse an administrator a node
 purely for being obvious.
+
+**The audit trail is gated.** `/admin/audit` names the ids and titles of the
+nodes a user was not given, which is exactly what silent exclusion hides, so
+the route cannot be open. By default the `/admin` routes serve loopback
+clients only — the local demo works with no configuration. Set
+`BRAHMO_ADMIN_TOKEN` and an `X-Admin-Token` header is required from every
+host, which is what any non-local deployment must do. Refusals are `404`
+rather than `403`, because a `403` confirms the endpoint exists and has
+something behind it. `/health` reports `admin_api_token_required` so the
+posture is never a guess. CORS origins are an explicit list, not `*`, so no
+third-party site can read the trail from a logged-in browser.
 
 **Errors reveal nothing.** Unhandled exceptions are logged server-side and
 answered with a generic `Internal server error`. An echoed exception body can
@@ -301,9 +319,12 @@ unknown roles fall through to a policy that grants nothing.
 - **Per-check timings are apportioned, not individually measured.** The five
   checks run as five progressive SQL statements; timing each separately would
   add round trips to report a number already under 2 ms in total.
-- **RLS is provided but the application also filters.** Both layers enforce
-  checks 1–4. The application path is what the demo exercises; RLS is defence
-  in depth for direct database access.
+- **RLS is provided, reviewed, and unverified.** The policies have never been
+  executed against a live Supabase instance in this repository's test runs,
+  which target the SQLite fallback. The compliance policy is also a
+  simplification of the application rule (it does not model department-scoped
+  HOD clearance), so it is a floor for direct database access rather than an
+  exact mirror of the pipeline.
 - **The SQLite fallback denormalises `compliance_tags`** into a `required_tags`
   string because SQLite has no array type. PostgreSQL uses native `TEXT[]` with
   a GIN index. The predicate builder is dialect-aware; the rules are identical.

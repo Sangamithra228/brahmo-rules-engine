@@ -48,6 +48,21 @@ class Settings:
     supabase_db_url = os.environ.get("SUPABASE_DB_URL", "")
     sqlite_path = os.environ.get("SQLITE_PATH") or None
 
+    # The /admin routes expose the exclusion trail - the ids and titles of
+    # nodes a user was NOT given. That is precisely what silent exclusion
+    # hides, so the routes cannot be open. Default posture: loopback only,
+    # which keeps the local demo working with no configuration. Set
+    # BRAHMO_ADMIN_TOKEN to require a header instead, which is what any
+    # non-local deployment must do.
+    admin_token = os.environ.get("BRAHMO_ADMIN_TOKEN", "")
+    cors_origins = [
+        o.strip() for o in os.environ.get(
+            "BRAHMO_CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost:8000,http://127.0.0.1:8000",
+        ).split(",") if o.strip()
+    ]
+
 
 settings = Settings()
 

@@ -13,7 +13,7 @@ import logging
 import os
 from typing import List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,11 +36,13 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+# A wildcard origin would let any website read the /admin exclusion trail
+# from a logged-in browser. Origins are explicit and configurable.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Admin-Token"],
 )
 
 repo = get_repository()
@@ -127,25 +129,28 @@ def pipeline_get(run_id: str):
 # ------------------------------------------------------- operator endpoints
 @app.get("/admin/audit")
 def admin_audit(
+    request: Request,
     user: str,
     zone2: bool = True,
-    threshold: Optional[float] = None,
-    mode: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
 ):
-    """Operator-only. Explains every exclusion.
+    """Explains every exclusion. Gated - see api.require_admin.
 
     Deliberately separate from /pipeline/run: merging the two would end silent
-    exclusion, because a caller could count what was removed. In production
-    this sits behind an operator role.
+    exclusion, because a caller could count what was removed. It is gated
+    because the trail names the very nodes the pipeline withheld.
     """
-    return api.audit(
-        repo, engine,
-        {"user": user, "zone2": zone2, "threshold": threshold, "mode": mode},
-    )
+    api.require_admin(request.client.host if request.client else None,
+                      x_admin_token)
+    return api.audit(repo, engine, {"user": user, "zone2": zone2})
 
 
 @app.get("/admin/derivability")
-def admin_derivability():
+def admin_derivability(
+    request: Request, x_admin_token: Optional[str] = Header(default=None)
+):
+    api.require_admin(request.client.host if request.client else None,
+                      x_admin_token)
     return api.derivability_report()
 
 

@@ -12,6 +12,10 @@
 --   SELECT set_config('brahmo.clearance',  'MNPI',    true);
 --   SELECT set_config('brahmo.read_all',   'false',   true);
 --
+-- These policies have NOT been executed against a live Supabase instance in
+-- this repository's test runs; the test suite targets the SQLite fallback.
+-- Treat them as reviewed-but-unverified until you have run them.
+--
 -- Note what is NOT here: check 5 (derivability). Derivability is a relevance
 -- judgement, not an access-control decision. Enforcing it in RLS would mean
 -- the database refuses to show an administrator a node purely because it is
@@ -24,6 +28,13 @@ ALTER TABLE knowledge_nodes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY p_isolation ON knowledge_nodes FOR SELECT
     USING (org_id = current_setting('brahmo.org_id', true));
 
+-- NOTE: this is a SIMPLIFICATION of the application rule, deliberately.
+-- The pipeline scopes a HOD's implicit MNPI clearance to their own
+-- department (see backend/policy/role_policy.py); this policy tests the
+-- flattened clearance list only. It is therefore never MORE permissive than
+-- the application for a correctly-populated session, but it is not an exact
+-- mirror. The application remains the authoritative compliance decision;
+-- RLS is a floor for direct database access, not a replacement.
 CREATE POLICY p_compliance ON knowledge_nodes FOR SELECT
     USING (
         compliance_tags = '{}'
