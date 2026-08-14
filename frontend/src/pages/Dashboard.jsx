@@ -29,7 +29,9 @@ export default function Dashboard() {
   const [selectedId, setSelectedId] = useState('')
   const [result, setResult] = useState(null)
   const [comparison, setComparison] = useState([])
-  const [options, setOptions] = useState({ zone2: true, threshold: 0.7, mode: 'strict' })
+  // Only Zone 2 is demo-controllable. The derivability threshold and
+  // permission mode come from organization configuration on the backend.
+  const [options, setOptions] = useState({ zone2: true })
   const [busy, setBusy] = useState(false)
   const [comparing, setComparing] = useState(false)
   const [error, setError] = useState(null)
@@ -84,7 +86,7 @@ export default function Dashboard() {
 
   const setOption = (key, value) => {
     setComparison([])
-    setOptions((o) => ({ ...o, [key]: key === 'threshold' ? Number(value) : value }))
+    setOptions((o) => ({ ...o, [key]: value }))
   }
 
   const dbLabel = health?.database_backend === 'supabase'
@@ -129,6 +131,7 @@ export default function Dashboard() {
           profile={result?.user_profile}
           options={options}
           onOptionChange={setOption}
+          effectiveThreshold={result?.options?.derivability_threshold}
           onRun={() => run({ user: selectedId })}
           onRunAdhoc={(p) =>
             run({

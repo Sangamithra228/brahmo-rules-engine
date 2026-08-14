@@ -73,35 +73,49 @@ class RulesEngine:
         timing["entry_point_ms"] = _ms(t)
         notes.append(f"Entry point {entry.level_id}: {entry.reason}")
 
-        # ---- 3. BFS -----------------------------------------------------
+        # ---- 3. BFS (upward only) ---------------------------------------
         t = time.perf_counter()
-        cross = entry.is_fallback and perms.policy.cross_department_on_fallback
-        walk = traverse(
-            entry_level_id=entry.level_id,
-            levels=self.levels(),
-            user_department=user.department,
-            cross_department=cross,
-        )
+        walk = traverse(entry_level_id=entry.level_id, levels=self.levels())
+        scope = dict(walk.reachable)
+
+        # A user whose department has no tier in the DAG enters at the root,
+        # where an upward walk reaches nothing. Roles marked as
+        # cross-organisation in the policy table (ADMIN, QUALITY, AUDITOR) are
+        # granted org-wide scope instead. This is a scope grant driven by role
+        # policy, NOT a traversal - BFS above is strictly upward. Distance is
+        # tier depth below the entry point, used only for the compression hint.
+        org_wide = entry.is_fallback and perms.policy.cross_department_on_fallback
+        if org_wide:
+            for level in self.levels():
+                if level.id not in scope:
+                    scope[level.id] = max(
+                        level.level_number - entry.level_number, 1
+                    )
+            notes.append(
+                f"Role {user.role} has org-wide scope: department "
+                f"'{user.department}' has no tier in the DAG, so all "
+                f"{len(scope)} tiers are in scope (still subject to all five checks)"
+            )
+
         timing["bfs_ms"] = _ms(t)
+        notes.append(
+            f"BFS walked up from {entry.level_id} and reached "
+            f"{len(walk.reachable)} tier(s)"
+        )
         if walk.multi_parent_hits:
             notes.append(
-                "Multi-parent levels re-encountered and skipped by the visited "
+                "Multi-parent tiers re-encountered and skipped by the visited "
                 f"set: {', '.join(walk.multi_parent_hits)}"
-            )
-        if walk.blocked_foreign_parents:
-            notes.append(
-                "Refused to ascend into co-parent departments: "
-                f"{', '.join(walk.blocked_foreign_parents)}"
             )
 
         after_bfs = self.repo.count_candidates(
-            self.org_id, list(walk.reachable.keys()), []
+            self.org_id, list(scope.keys()), []
         )
 
         # ---- 4. Zone 2 injection ---------------------------------------
         t = time.perf_counter()
         injection = inject(
-            reachable=walk.reachable,
+            reachable=scope,
             zone2_node_ids=self.repo.zone2_node_ids(self.org_id),
             enabled=opts.zone2_enabled,
         )
@@ -119,7 +133,7 @@ class RulesEngine:
         predicates = build_predicates(
             perms, self.org_id, config,
             scope_exempt_level_ids=(
-                list(walk.reachable.keys())
+                list(scope.keys())
                 if opts.permission_mode == "scope_aware" else []
             ),
             dialect=getattr(self.repo, "dialect", "sqlite"),

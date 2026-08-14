@@ -79,13 +79,16 @@ export default function DagVisualization({ hierarchy, traversal }) {
         })}
       </ul>
 
-      {traversal?.blocked_foreign_parents?.length > 0 && (
-        <p className="meta mt-3 pt-2 border-t border-rule">
-          Did not ascend into{' '}
-          <span className="num">{traversal.blocked_foreign_parents.join(', ')}</span>
-          {' '}— a jointly-owned node is not a bridge into the co-owner&apos;s department.
-        </p>
-      )}
+      <p className="meta mt-3 pt-2 border-t border-rule">
+        {traversal?.org_wide_scope
+          ? 'This role has org-wide scope: the department has no tier in the DAG, so all tiers are in scope and the five checks do the filtering.'
+          : `BFS walked up ${traversal?.ancestor_path?.length ?? 0} tier(s) from the entry point to the root.`}
+        {traversal?.multi_parent_hits?.length > 0 && (
+          <> Converging ancestors visited once:{' '}
+            <span className="num">{traversal.multi_parent_hits.join(', ')}</span>.
+          </>
+        )}
+      </p>
     </div>
   )
 }

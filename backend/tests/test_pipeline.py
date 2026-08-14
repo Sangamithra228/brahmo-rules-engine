@@ -133,3 +133,70 @@ class TestPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPipelineOrder(unittest.TestCase):
+    """Stage ordering, and that BFS stays upward-only inside the engine."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo, cls.eng = engine()
+
+    def run_for(self, uid, **kw):
+        return self.eng.run(self.repo.get_user(uid), EngineOptions(**kw))
+
+    def ids(self, uid, **kw):
+        return {c.id for c in self.run_for(uid, **kw).candidate_set}
+
+    def test_core_pipeline_reaches_only_ancestors(self):
+        """The engine must not reach tiers below the entry point for a user
+        whose department has a home in the DAG."""
+        from backend.pipeline.entry_point_resolver import resolve_entry_point
+        from backend.pipeline.permission_compiler import compile_permissions
+
+        by_id = {l.id: l for l in self.eng.levels()}
+        for uid in ["U-PRIYA", "U-VIKRAM", "U-ANANYA", "U-SHARMA"]:
+            user = self.repo.get_user(uid)
+            entry = resolve_entry_point(compile_permissions(user), self.eng.levels())
+            ancestors, stack = {entry.level_id}, [entry.level_id]
+            while stack:
+                for p in by_id[stack.pop()].parent_ids:
+                    if p not in ancestors:
+                        ancestors.add(p)
+                        stack.append(p)
+            for c in self.eng.run(user, EngineOptions()).candidate_set:
+                if c.source == "ZONE2":
+                    continue
+                tier = self.repo._conn.execute(
+                    "SELECT hierarchy_level_id h FROM knowledge_nodes WHERE id=?",
+                    (c.id,)).fetchone()["h"]
+                self.assertIn(tier, ancestors,
+                              f"{uid} received {c.id} from non-ancestor tier {tier}")
+
+    def test_zone2_is_injected_after_bfs_and_before_the_checks(self):
+        f = self.run_for("U-PRIYA").funnel
+        self.assertGreater(f["after_zone2"], f["after_bfs"],
+                           "injection must widen the set after BFS")
+        self.assertLessEqual(f["after_isolation"], f["after_zone2"],
+                             "check 1 must run on the injected set")
+
+    def test_zone2_nodes_are_subject_to_every_check(self):
+        """Global nodes are candidates, not grants."""
+        priya = self.ids("U-PRIYA")
+        self.assertNotIn("N-G04", priya)   # derivability 0.75
+        self.assertNotIn("N-G06", priya)   # derivability 0.80
+        self.assertIn("N-G01", priya)
+
+    def test_five_checks_appear_in_the_specified_order(self):
+        f = self.run_for("U-VIKRAM").funnel
+        order = [k for k in f if k.startswith("after_")]
+        self.assertEqual(order[2:], [
+            "after_isolation", "after_compliance", "after_permission",
+            "after_temporal", "after_derivability"])
+
+    def test_bfs_reports_the_ancestor_path_it_walked(self):
+        from backend import api
+        t = api.run_pipeline(self.repo, self.eng, {"user": "U-PRIYA"})["traversal"]
+        self.assertEqual(t["ancestor_path"][0], "HL-10-ORTHO-W")
+        self.assertEqual(t["ancestor_path"][-1], "HL-01")
+        self.assertFalse(t["org_wide_scope"])

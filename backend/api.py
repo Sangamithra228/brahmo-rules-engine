@@ -151,16 +151,23 @@ def _traversal_view(engine, user: User) -> Dict[str, Any]:
     """
     perms = compile_permissions(user)
     entry = resolve_entry_point(perms, engine.levels())
-    cross = entry.is_fallback and perms.policy.cross_department_on_fallback
-    walk = traverse(entry.level_id, engine.levels(), user.department, cross)
+    walk = traverse(entry.level_id, engine.levels())
+    org_wide = entry.is_fallback and perms.policy.cross_department_on_fallback
+
+    scope = dict(walk.reachable)
+    if org_wide:
+        for level in engine.levels():
+            scope.setdefault(level.id, max(level.level_number - entry.level_number, 1))
+
     return {
         "entry_point": entry.level_id,
         "entry_point_name": entry.level_name,
         "entry_reason": entry.reason,
-        "reachable_levels": sorted(walk.reachable.keys()),
-        "distances": walk.distances if hasattr(walk, "distances") else walk.reachable,
+        "ancestor_path": sorted(walk.reachable, key=lambda k: walk.reachable[k]),
+        "reachable_levels": sorted(scope.keys()),
+        "distances": scope,
         "multi_parent_hits": walk.multi_parent_hits,
-        "blocked_foreign_parents": walk.blocked_foreign_parents,
+        "org_wide_scope": org_wide,
     }
 
 

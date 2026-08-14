@@ -76,46 +76,48 @@ through node by node.
 
 ---
 
-## Decision 1 — BFS direction is up, plus a department-scoped walk down
+## Decision 1 — BFS walks UP only
 
-Pure upward traversal from Ortho Ward reaches Ortho General → Ortho Dept →
-Clinical Division → Hospital. That is five tiers and it misses the TKR Unit
-and the Post-TKR Protocol Area, which are siblings under Ortho Dept rather
-than ancestors of the ward. It also misses Priya's own patients, who sit
-*below* her at L12.
+The traversal follows `parent_ids` from the entry point to the root, and does
+nothing else:
 
-But an unrestricted walk down from Clinical Division would hand her
-Cardiology, Paediatrics and ICU, which is the exact failure the assessment
-is about.
+```
+entry_point -> parent -> parent -> ... -> root
+```
 
-So: **ascend freely through department-less tiers and your own department;
-descend only into tiers owned by your own department.** Department isolation
-becomes a structural property of the traversal, enforced before any check
-runs, rather than something check 1 has to clean up afterwards.
+A user inherits the context of the tiers **above** them: a ward nurse inherits
+her department's protocols, her division's, and the hospital's. She does not
+inherit the tiers beneath or beside her.
 
-This yields 20 reachable nodes for Priya, which is the "~20" the setup guide
-predicts.
+Department isolation therefore falls out of the DAG's shape rather than from
+any rule in the traversal. Cardiology is not an ancestor of the Ortho Ward, so
+Priya cannot reach it — no filtering required, and nothing in the traversal
+names a department.
 
-## Decision 2 — a multi-parent node is not a bridge between departments
+**Consequence, stated plainly.** Upward-only means Priya does not reach the
+TKR Unit, the Post-TKR Protocol area, or her own patients' tier, because all
+three are siblings or descendants of her ward rather than ancestors. Her BFS
+reach is 15 nodes, not the "~20" the setup guide predicts, and her final set
+is 11 rather than the "~15" it predicts. Vikram lands on 13 against a stated
+"~22".
 
-Post-TKR Protocol Area has `parent_ids = [Ortho, Surgery]`. The visited set
-handles the obvious part: it is enqueued from both paths but processed once,
-at its shortest distance.
+An earlier revision added a department-scoped downward walk, which reproduced
+the guide's numbers closely (Priya 20 reachable, Vikram exactly 22). That was
+removed because the specification's prose is explicit that BFS walks up, and
+the prose governs. The arithmetic gap between the two readings is documented
+here rather than hidden.
 
-The subtler part is what happens *above* it. Naive upward traversal walks
-from Post-TKR into Surgery Department, and Priya has just acquired another
-department's tier through a shared child. On this seed data nothing leaks
-(Surgery has no nodes), but the general case is a real privilege-escalation
-path: co-own one node with a department and inherit its whole subtree.
+## Decision 2 — multi-parent tiers converge, they do not duplicate
 
-The rule is therefore: ascend into department-less tiers and your own
-department; refuse a parent belonging to a foreign department. Refusals are
-recorded on `TraversalResult.blocked_foreign_parents` and surfaced in the demo
-notes, so the containment is visible rather than implicit.
+`HL-08-POST-TKR` has `parent_ids = [HL-05-ORTHO, HL-05-SURG]`. Entering there,
+BFS reaches both parents at distance 1, and both parents lead to
+`HL-03-CLIN` — which is enqueued twice and processed once, at distance 2. That
+convergence is recorded on `TraversalResult.multi_parent_hits`.
 
-This answers "which department's ceiling applies to a multi-parent node?" —
-neither. The node is reachable from both, and reachability through it confers
-nothing about the co-parent.
+The FIFO queue is what makes the recorded distance genuinely the shortest: the
+first time a tier is dequeued is via a shortest path, so a later, longer path
+to the same tier finds it already visited and is discarded rather than
+overwriting it.
 
 ## Decision 3 — Zone 2 is exempt from the permission ceiling
 
@@ -314,6 +316,24 @@ The graph is declared acyclic, so a cycle is a bug, not a case to tolerate.
    before insert, and `supabase/schema.sql` carries the same guard as a
    Postgres trigger using a recursive CTE. Rejecting at the door beats
    detecting at query time.
+
+## Decision 13 — org-wide scope is a role grant, not a traversal
+
+Three seeded users — the Pharmacist, the QA officer and the Admin — belong to
+departments with no tier in the DAG. Their entry point resolves to the org
+root, where an upward walk reaches exactly one tier.
+
+For roles whose policy sets `cross_department_on_fallback` (ADMIN, QUALITY,
+AUDITOR) the engine grants **org-wide scope**: every tier enters the candidate
+pool. This is a scope decision read from the role policy table, not a downward
+traversal — BFS itself remains strictly upward, and the grant is recorded in
+the run notes and exposed as `traversal.org_wide_scope` so it is never
+invisible.
+
+Those users are not privileged by it. Suresh sees 42 nodes because he is an
+administrator who clears every compliance tag; Sunita sees 22 from the same
+50-tier scope, because her L6 ceiling removes the tiers above her. The scope
+grant widens the input to the sieve; the five checks still do the filtering.
 
 ## Decision 11 — Supabase is primary, and the fallback is never silent
 

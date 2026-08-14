@@ -13,7 +13,7 @@ function ProfileField({ label, value, mono }) {
 
 export default function UserSelector({
   users, selectedId, onSelect, profile, options, onOptionChange,
-  onRun, onRunAdhoc, busy,
+  effectiveThreshold, onRun, onRunAdhoc, busy,
 }) {
   const [showAdhoc, setShowAdhoc] = useState(false)
   const [adhoc, setAdhoc] = useState({
@@ -60,22 +60,10 @@ export default function UserSelector({
               </button>
             </div>
             <div>
-              <label className="field-label" htmlFor="mode">Permission mode</label>
-              <select
-                id="mode" className="control" value={options.mode}
-                onChange={(e) => onOptionChange('mode', e.target.value)}
-              >
-                <option value="strict">strict</option>
-                <option value="scope_aware">scope_aware</option>
-              </select>
-            </div>
-            <div>
-              <label className="field-label" htmlFor="thr">Derivability</label>
-              <input
-                id="thr" type="number" min="0" max="1" step="0.05"
-                className="control w-20 num" value={options.threshold}
-                onChange={(e) => onOptionChange('threshold', e.target.value)}
-              />
+              <span className="field-label">Derivability threshold</span>
+              <p className="num py-1.5" title="Configured on the organization; not editable from the dashboard">
+                {effectiveThreshold != null ? effectiveThreshold.toFixed(2) : '—'}
+              </p>
             </div>
           </div>
         </div>

@@ -32,10 +32,12 @@ export const getUser = (id) => request(`/users/${encodeURIComponent(id)}`)
 export const getHierarchy = () => request('/hierarchy')
 
 /**
- * Run the pipeline.
- * Pass { user } for a seeded profile, or { role, department, ceiling,
- * clearance } to push an unseen profile through without writing to the
- * database - which is how the surprise-user test is demonstrated.
+ * Run the pipeline. Pass { user } for a seeded profile, or { role,
+ * department, ceiling, clearance } for an unseen profile, which is run
+ * without being written to the database.
+ *
+ * Derivability threshold and permission mode are not sent: the backend uses
+ * the configured organization values and echoes them back under `options`.
  */
 export const runPipeline = (body) =>
   request('/pipeline/run', { method: 'POST', body: JSON.stringify(body) })
@@ -45,7 +47,5 @@ export const getRun = (runId) => request(`/pipeline/${runId}`)
 export const comparePipelines = (userIds, opts = {}) => {
   const q = new URLSearchParams({ users: userIds.join(',') })
   if (opts.zone2 === false) q.set('zone2', 'false')
-  if (opts.threshold != null) q.set('threshold', String(opts.threshold))
-  if (opts.mode) q.set('mode', opts.mode)
   return request(`/pipeline/compare?${q}`)
 }

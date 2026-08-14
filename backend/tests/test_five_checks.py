@@ -94,12 +94,14 @@ class TestFiveChecks(unittest.TestCase):
         tight = self.ids("U-SURESH", derivability_threshold=0.2)
         self.assertGreater(len(loose), len(tight))
 
-    def test_org_specific_node_about_a_generic_drug_survives(self):
-        """'Paracetamol is an analgesic' goes; 'Supra uses Paracetamol 650mg
-        QDS post-TKR' stays."""
+    def test_derivability_separates_nodes_on_the_same_tier(self):
+        """N-D01 and N-O04 both sit at HL-05-ORTHO and both reach Vikram, so
+        only check 5 can tell them apart: one is a textbook definition of a
+        knee replacement, the other is Supra's own implant vendor decision."""
         v = self.ids("U-VIKRAM")
-        self.assertIn("N-O02", v)
-        self.assertNotIn("N-D02", v)
+        self.assertIn("N-O04", v, "an org-specific decision must survive")
+        self.assertNotIn("N-D01", v, "a textbook definition must be removed")
+        self.assertNotIn("N-D04", v)
 
 
 if __name__ == "__main__":

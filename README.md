@@ -11,15 +11,15 @@ answers, from one code path:
 
 | User | Role | Ceiling | Department | Entry point | Final |
 |---|---|---:|---|---|---:|
-| Nurse Priya | VIEWER | L10 | ortho | Ortho Ward (L10) | 13 |
-| Dr. Vikram | HOD | L4 | ortho | Ortho Dept (L5) | 22 |
-| Dr. Ananya | EDITOR | L8 | medicine | Medicine General (L8) | 11 |
-| Dr. Sharma | HOD | L4 | medicine | Medicine Dept (L5) | 15 |
-| Pharmacist Ravi | VIEWER | L12 | pharmacy | Hospital (fallback) | 8 |
-| Dr. Sunita | QUALITY | L6 | quality | Hospital (cross-dept) | 22 |
-| Admin Suresh | ADMIN | L1 | admin | Hospital (cross-dept) | 42 |
+| Nurse Priya | VIEWER | L10 | ortho | Ortho Ward (L10) | 11 |
+| Dr. Vikram | HOD | L4 | ortho | Ortho Dept (L5) | 13 |
+| Dr. Ananya | EDITOR | L8 | medicine | Medicine General (L8) | 9 |
+| Dr. Sharma | HOD | L4 | medicine | Medicine Dept (L5) | 12 |
+| Pharmacist Ravi | VIEWER | L12 | pharmacy | Hospital (org-wide off) | 8 |
+| Dr. Sunita | QUALITY | L6 | quality | Hospital (org-wide) | 22 |
+| Admin Suresh | ADMIN | L1 | admin | Hospital (org-wide) | 42 |
 
-Measured 1–6 ms per run against the 500 ms target, on the SQLite fallback.
+Measured 1–7 ms per run against the 500 ms target, on the SQLite fallback.
 Timing on Supabase will be higher (network round trips) and has not been
 measured — see *Known tradeoffs*.
 
@@ -34,9 +34,9 @@ User profile
    │                           {level: {can_read, can_write}} map + clearance set
    ├─ Entry Point Resolver ─── department + ceiling → starting DAG tier
    │
-   ├─ BFS Traversal ────────── upward through parent edges, plus a
-   │                           department-scoped walk down; queue + visited set;
-   │                           multi-parent safe; distance_from_entry recorded
+   ├─ BFS Traversal ────────── UPWARD only, following parent_ids to the root;
+   │                           FIFO queue + visited set; multi-parent safe;
+   │                           distance_from_entry recorded
    ├─ Zone 2 Injection ─────── GLOBAL nodes merged into the candidate pool,
    │                           after BFS and before the checks
    │
@@ -68,7 +68,7 @@ itself, is in [`docs/architecture.md`](docs/architecture.md).
 | Database | Supabase / PostgreSQL (**primary**), SQLite (offline fallback) |
 | Backend | Python 3.11+, FastAPI |
 | Frontend | React 18, Vite, Tailwind CSS |
-| Tests | `unittest`, 98 tests, standard library only |
+| Tests | `unittest`, 108 tests, standard library only |
 
 The React frontend is real (Vite + React 18 + Tailwind, source in
 `frontend/src`). It has **not been built or linted in this environment** — see
@@ -108,8 +108,8 @@ Set `SUPABASE_DB_URL` in `.env`. `DATABASE_BACKEND` defaults to `supabase`.
 | `SUPABASE_DB_URL` | — | PostgreSQL connection string |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | — | Supabase project API |
 | `BRAHMO_ORG_ID` | `supra` | Tenant |
-| `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff |
-| `BRAHMO_PERMISSION_MODE` | `strict` | `strict` or `scope_aware` |
+| `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff (configuration only; the dashboard displays it read-only) |
+| `BRAHMO_PERMISSION_MODE` | `strict` | Internal; the dashboard exposes no selector |
 
 `.env` is gitignored. No credentials are committed anywhere in this repo.
 
@@ -162,7 +162,7 @@ instructions rather than silently using the wrong database.
 python -m unittest discover -s backend/tests -t .
 ```
 
-98 tests, no dependencies. They run against the SQLite fallback, so the
+108 tests, no dependencies. They run against the SQLite fallback, so the
 PostgreSQL dialect is verified by asserting on the SQL the builder emits
 rather than by executing it. Coverage:
 
@@ -196,7 +196,7 @@ rather than by executing it. Coverage:
 `POST /pipeline/run` accepts either a seeded user or an inline profile:
 
 ```jsonc
-{ "user": "U-PRIYA", "zone2": true, "threshold": 0.7, "mode": "strict" }
+{ "user": "U-PRIYA", "zone2": true }
 
 // or a profile that exists in no database:
 { "role": "AUDITOR", "department": "audit", "ceiling": 3,
@@ -243,7 +243,7 @@ unknown roles fall through to a policy that grants nothing.
 - Checks 1–4 are indexed SQL predicates; every one has a supporting index plus
   a composite covering the hot path.
 - Derivability is a precomputed column — the scoring cost sits at ingest.
-- Measured 1–6 ms per run across all seven users on the SQLite fallback. The
+- Measured 1–7 ms per run across all seven users on the SQLite fallback. The
   dashboard displays the figure the backend reports, never a fabricated one.
   Supabase timing is not yet measured.
 
@@ -251,15 +251,15 @@ unknown roles fall through to a policy that grants nothing.
 
 ## Demo scenarios
 
-1. **Nurse Priya** — full pipeline. 50 → BFS 20 → +Zone 2 30 → 13. The funnel
-   shows compliance taking 5, permission 10, derivability 2.
-2. **Dr. Vikram** — same graph, 22 nodes. Different entry point, and his HOD
+1. **Nurse Priya** — full pipeline. 50 → BFS 15 → +Zone 2 25 → 11. The funnel
+   shows compliance taking 5, permission 7, derivability 2.
+2. **Dr. Vikram** — same graph, 13 nodes. Different entry point, and his HOD
    role clears his own department's MNPI: he sees `N-O11` (budget) but not
    `N-O12`, because every tag must clear, not any.
 3. **Silent exclusion** — Priya's set has zero Cardiology, Paediatrics or
    Medicine nodes and no indication they exist. Then show `/admin/audit` to
    prove the trail exists on a separate operator endpoint.
-4. **Zone 2** — toggle off: Priya drops 13 → 5 and loses all eight drug-safety
+4. **Zone 2** — toggle off: Priya drops 11 → 3 and loses all eight drug-safety
    globals including the Warfarin/NSAID rule. Toggle on. Note that two Zone 2
    nodes (`N-G04`, `N-G06`) are still removed by check 5, so injection widens
    the input to the sieve rather than punching through it.
@@ -269,6 +269,13 @@ unknown roles fall through to a policy that grants nothing.
 ---
 
 ## Known tradeoffs
+
+- **BFS is upward-only, which costs some of the setup guide's expected
+  counts.** The guide predicts roughly 15 / 22 / 40 final nodes for Priya /
+  Vikram / Suresh; upward-only traversal yields 11 / 13 / 42. The guide's
+  sample candidate set also shows Priya seeing nodes that live below her ward
+  and so are unreachable by an upward walk. The prose ("walks UP the DAG")
+  and the numbers disagree; the prose was followed. See Decision 1.
 
 - **The frontend has not been built.** `npm install` and `npm run build` have
   not been run against this source, and neither has ESLint. The module graph,
@@ -288,6 +295,6 @@ unknown roles fall through to a policy that grants nothing.
 - **The SQLite fallback denormalises `compliance_tags`** into a `required_tags`
   string because SQLite has no array type. PostgreSQL uses native `TEXT[]` with
   a GIN index. The predicate builder is dialect-aware; the rules are identical.
-- **`strict` is the default permission mode** because it matches the brief's
-  literal rule, but `scope_aware` is arguably the better production model. See
-  Decision 4 in `docs/architecture.md`.
+- **`scope_aware` permission mode still exists in the backend** but is not
+  exposed in the dashboard; the demo runs the assessment-compliant `strict`
+  behaviour throughout. See Decision 4 in `docs/architecture.md`.
