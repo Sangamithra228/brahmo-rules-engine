@@ -251,6 +251,30 @@ class SQLiteRepository(Repository):
             return None, []
         return "org_id = ? AND (%s)" % " OR ".join(clauses), params
 
+    def run_pipeline_single_query(self, org_id, candidate_level_ids,
+                                  zone2_enabled, predicates):
+        from backend.repository import pipeline_sql
+
+        sql, params = pipeline_sql.build(
+            org_id, candidate_level_ids, zone2_enabled, predicates,
+            placeholder="?")
+        rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        funnel, node_rows = pipeline_sql.split_rows(rows)
+        return {"funnel": funnel, "rows": [self._node_from_dict(r) for r in node_rows]}
+
+    @staticmethod
+    def _node_from_dict(r: dict) -> KnowledgeNode:
+        return KnowledgeNode(
+            id=r["id"], org_id=r["org_id"],
+            hierarchy_level_id=r["hierarchy_level_id"], type=r["type"],
+            title=r["title"], content=r["content"], importance=r["importance"],
+            zone=r["zone"], status=r["status"],
+            derivability_score=r["derivability_score"],
+            compliance_tags=json.loads(r["compliance_tags"]),
+            department=r["department"], valid_until=r["valid_until"],
+            superseded_by=r["superseded_by"],
+            hierarchy_level=r["hierarchy_level"])
+
     # ---------------- the five checks ----------------
     def run_checks(
         self,

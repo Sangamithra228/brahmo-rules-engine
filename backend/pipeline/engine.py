@@ -108,21 +108,27 @@ class RulesEngine:
                 f"set: {', '.join(walk.multi_parent_hits)}"
             )
 
-        after_bfs = self.repo.count_candidates(
-            self.org_id, list(scope.keys()), []
-        )
+        # Counted inside the single statement below; only the fallback path
+        # needs its own query.
+        after_bfs = None
 
         # ---- 4. Zone 2 injection ---------------------------------------
         t = time.perf_counter()
+        # The zone-2 id list is only needed by the fallback/audit path; the
+        # single statement selects them itself.
         injection = inject(
             reachable=scope,
-            zone2_node_ids=self.repo.zone2_node_ids(self.org_id),
+            zone2_node_ids=(self.repo.zone2_node_ids(self.org_id)
+                            if opts.include_audit else []),
             enabled=opts.zone2_enabled,
         )
         timing["zone2_inject_ms"] = _ms(t)
-        after_zone2 = self.repo.count_candidates(
-            self.org_id, injection.level_ids, injection.injected_node_ids
-        )
+        after_zone2 = None
+        if opts.include_audit:
+            after_bfs = self.repo.count_candidates(
+                self.org_id, list(scope.keys()), [])
+            after_zone2 = self.repo.count_candidates(
+                self.org_id, injection.level_ids, injection.injected_node_ids)
         if not opts.zone2_enabled:
             notes.append("Zone 2 injection DISABLED for this run (demo toggle)")
 
@@ -139,20 +145,52 @@ class RulesEngine:
             dialect=getattr(self.repo, "dialect", "sqlite"),
         )
 
+        # One statement when we can: the five checks stay sequential as
+        # chained CTEs, but the whole tail costs a single round trip instead
+        # of seven. Audit mode needs the per-stage id lists, so it keeps the
+        # progressive path.
+        single_query = not opts.include_audit
         t = time.perf_counter()
-        checked = self.repo.run_checks(
-            org_id=self.org_id,
-            candidate_level_ids=injection.level_ids,
-            predicates=predicates,
-            fetch_rows_at_end=True,
-            collect_ids_per_stage=opts.include_audit,
-            extra_node_ids=injection.injected_node_ids,
-        )
+        if single_query:
+            try:
+                packed = self.repo.run_pipeline_single_query(
+                    org_id=self.org_id,
+                    candidate_level_ids=injection.level_ids,
+                    zone2_enabled=opts.zone2_enabled,
+                    predicates=predicates,
+                )
+            except NotImplementedError:
+                single_query = False
+
+        if not single_query:
+            checked = self.repo.run_checks(
+                org_id=self.org_id,
+                candidate_level_ids=injection.level_ids,
+                predicates=predicates,
+                fetch_rows_at_end=True,
+                collect_ids_per_stage=opts.include_audit,
+                extra_node_ids=injection.injected_node_ids,
+            )
         checks_total = _ms(t)
 
-        stage_counts = {s["check"]: s["count"] for s in checked["stages"]}
+        if single_query:
+            checked = {"stages": [], "rows": packed["rows"]}
+            stage_counts = {
+                "ISOLATION": packed["funnel"]["after_isolation"],
+                "COMPLIANCE": packed["funnel"]["after_compliance"],
+                "PERMISSION": packed["funnel"]["after_permission"],
+                "TEMPORAL": packed["funnel"]["after_temporal"],
+                "DERIVABILITY": packed["funnel"]["after_derivability"],
+            }
+        else:
+            stage_counts = {s["check"]: s["count"] for s in checked["stages"]}
         # Per-check timing is apportioned across the stages actually executed.
-        per = round(checks_total / max(len(checked["stages"]), 1), 3)
+        # The five checks execute as one statement, so `checks_total_ms` is
+        # the only figure actually measured here. The per-check values are it
+        # divided five ways and are labelled as such - not separate readings.
+        timing["checks_total_ms"] = checks_total
+        timing["checks_measured_together"] = bool(single_query)
+        per = round(checks_total / len(CHECK_ORDER), 3)
         for name in CHECK_ORDER:
             timing[f"check_{name.lower()}_ms"] = per
 
@@ -161,15 +199,17 @@ class RulesEngine:
         candidates = assemble(
             nodes=checked["rows"],
             distances=injection.distances,
-            injected_node_ids=injection.injected_node_ids,
         )
         timing["assemble_ms"] = _ms(t)
         timing["total_ms"] = _ms(t_total)
 
         funnel = {
-            "total_nodes": self.repo.total_node_count(self.org_id),
-            "after_bfs": after_bfs,
-            "after_zone2": after_zone2,
+            "total_nodes": (packed["funnel"]["total_nodes"] if single_query
+                            else self.repo.total_node_count(self.org_id)),
+            "after_bfs": (packed["funnel"]["after_bfs"] if single_query
+                          else after_bfs),
+            "after_zone2": (packed["funnel"]["after_zone2"] if single_query
+                            else after_zone2),
             "after_isolation": stage_counts.get("ISOLATION", 0),
             "after_compliance": stage_counts.get("COMPLIANCE", 0),
             "after_permission": stage_counts.get("PERMISSION", 0),

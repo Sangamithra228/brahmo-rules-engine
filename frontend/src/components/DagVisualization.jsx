@@ -17,7 +17,7 @@ export default function DagVisualization({ hierarchy, traversal }) {
     const children = {}
     hierarchy.forEach((h) =>
       h.parent_ids.forEach((p) => {
-        ;(children[p] ||= []).push(h.id)
+        (children[p] ||= []).push(h.id)
       })
     )
     const out = []

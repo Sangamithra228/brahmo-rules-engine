@@ -31,6 +31,22 @@ class Repository(ABC):
     @abstractmethod
     def zone2_node_ids(self, org_id: str) -> List[str]: ...
 
+    def run_pipeline_single_query(
+        self,
+        org_id: str,
+        candidate_level_ids: List[str],
+        zone2_enabled: bool,
+        predicates: List[Tuple[str, str, List[Any]]],
+    ) -> Dict[str, Any]:
+        """Whole pipeline tail in ONE statement: funnel counts + final rows.
+
+        The five checks are chained CTEs - c1 feeds c2, c2 feeds c3 - so the
+        order stays sequential and visible while costing a single round trip
+        instead of seven. Stores that cannot do this may leave it unimplemented
+        and the engine falls back to `run_checks`.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def run_checks(
         self,

@@ -43,13 +43,13 @@ def _hint(distance: int, importance: float) -> str:
 def assemble(
     nodes: List[KnowledgeNode],
     distances: Dict[str, int],
-    injected_node_ids: List[str],
 ) -> List[CandidateNode]:
-    injected = set(injected_node_ids)
     out: List[CandidateNode] = []
 
     for n in nodes:
-        is_zone2 = n.id in injected and n.hierarchy_level_id not in distances
+        # Zone 2 is a property of the node. A global node that also sits on
+        # the user's ancestor path was reached by BFS, so it is not "injected".
+        is_zone2 = n.zone == 2 and n.hierarchy_level_id not in distances
         distance = (
             ZONE2_DISTANCE if is_zone2
             else distances.get(n.hierarchy_level_id, ZONE2_DISTANCE)

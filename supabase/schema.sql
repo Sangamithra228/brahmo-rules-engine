@@ -111,6 +111,36 @@ CREATE INDEX idx_hierarchy_parent ON hierarchy_levels USING GIN(parent_ids);
 CREATE INDEX idx_nodes_pipeline ON knowledge_nodes
     (org_id, hierarchy_level, status, derivability_score);
 
+-- The single-statement pipeline opens with the BFS pool:
+--   WHERE org_id = ? AND hierarchy_level_id IN (...)
+-- and, when Zone 2 is on, a second arm:
+--   WHERE org_id = ? AND zone = 2
+-- Both are (org_id, <column>) leading-column lookups, so a composite serves
+-- them where the two single-column indexes above cannot be combined.
+CREATE INDEX idx_nodes_pool_bfs  ON knowledge_nodes (org_id, hierarchy_level_id);
+CREATE INDEX idx_nodes_pool_zone ON knowledge_nodes (org_id, zone);
+
+-- Check 4 reads valid_until on every surviving row. Partial, because the
+-- supplied dataset leaves it NULL almost everywhere and there is no point
+-- indexing rows the predicate short-circuits past.
+CREATE INDEX idx_nodes_valid_until ON knowledge_nodes (valid_until)
+    WHERE valid_until IS NOT NULL;
+
+-- Entry-point resolution filters hierarchy_levels by org and department.
+CREATE INDEX idx_hierarchy_dept ON hierarchy_levels (org_id, department);
+
+-- /users and get_user; small table, but it is on the hot path twice.
+CREATE INDEX idx_users_org ON users (org_id);
+
+-- NOT added, deliberately:
+--   users(department)      - the users table is 7 rows; an index costs more
+--                            to maintain than the scan it would replace.
+--   knowledge_nodes(title) - never filtered on.
+-- The GIN index on compliance_tags above IS worth it: check 2 uses array
+-- membership (%s = ANY(compliance_tags)) on PostgreSQL, which is exactly what
+-- GIN accelerates. It would be pointless on SQLite, which has no array type
+-- and uses the denormalised required_tags string instead.
+
 -- ---------------------------------------------------------------------
 -- Keep the denormalised level in step with the DAG.
 -- ---------------------------------------------------------------------

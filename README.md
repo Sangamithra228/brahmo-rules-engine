@@ -212,9 +212,11 @@ taken on trust:
 |---|---|
 | Backend test suite | **133 passing**, run against the SQLite fallback |
 | Pipeline behaviour, silent exclusion, timing | Verified live over HTTP |
-| Frontend build (`npm run build`) | **Not executed.** Verify in your environment |
-| Frontend lint (`npm run lint`) | **Not executed.** Verify in your environment |
-| Supabase connection | **Not executed.** Requires your database credential — run `python scripts/verify_supabase.py` |
+| Frontend lint (`npm run lint`) | **Passing** — ESLint clean, 0 problems |
+| Frontend JSX/ESM parse | **Passing** — all 10 modules parse |
+| Frontend build (`npm run build`) | **Not executed** — the vendored `node_modules` carries the Windows rollup binary, not the Linux one. Run it on your machine |
+| Supabase connection | **Not executed.** No network here — run `python scripts/verify_supabase.py` |
+| Supabase timing | **Not measured.** Run `python scripts/benchmark_pipeline.py` |
 | `schema.sql` / `seed.sql` / `rls_policies.sql` | **Not executed.** Run them in the Supabase SQL Editor, in that order |
 | RLS policies | Written and reviewed; not executed against a live instance |
 
@@ -334,6 +336,94 @@ unknown roles fall through to a policy that grants nothing.
 ---
 
 ## Performance
+
+### The Supabase round-trip problem
+
+Against SQLite the pipeline runs in about 1 ms. Against a hosted database in
+`ap-southeast-1` the same code took roughly 900–1600 ms, and the cause was not
+query cost — it was **eleven network round trips per pipeline run**:
+
+| # | Query |
+|---|---|
+| 1 | fetch the user |
+| 2 | count nodes reachable by BFS |
+| 3 | fetch the Zone 2 node ids |
+| 4 | count after Zone 2 injection |
+| 5–9 | one `COUNT(*)` per check, to build the funnel |
+| 10 | fetch the surviving rows |
+| 11 | count all nodes in the org |
+
+At ~100 ms RTT that is ~1.1 s of pure latency before the database does any
+work.
+
+### What changed
+
+Queries 2–11 collapse into **one statement** built by
+`backend/repository/pipeline_sql.py`. The five checks remain five chained
+CTEs — `c2_compliance` selects `FROM c1_isolation`, `c3_permission` selects
+`FROM c2_compliance`, and so on — so the sequence is preserved and legible in
+the generated SQL. The funnel counts come from those same CTEs, and the final
+rows are joined onto them, so counts and candidates arrive together.
+
+**Round trips per run: 11 → 2** (one to fetch the user, one for everything
+else). The hierarchy DAG is loaded once per session, not per run.
+
+Two things deliberately did *not* change: BFS still walks only the user's
+reachable subgraph rather than scanning the table, and node content is still
+fetched only for rows that survive all five checks.
+
+The audit path (`/admin/audit`) keeps the original progressive
+implementation, because it needs the per-stage id lists. That also makes it
+the reference implementation the optimization is tested against.
+
+### Measurements
+
+| Backend | Median per run | Round trips |
+|---|---|---|
+| SQLite (this environment) | 0.9–1.7 ms | 2 |
+| Supabase Session Pooler | **not measured — see below** | 2 |
+
+Run it yourself:
+
+```bash
+python scripts/benchmark_pipeline.py --runs 8
+```
+
+The first run per user is reported separately (connection and plan-cache
+warm-up); the median of the rest is the meaningful number.
+
+**The Supabase figure has not been measured.** This environment has no network
+access, so the 11 → 2 reduction is verified by counting statements, not by
+timing them against your database. With two round trips the expected floor is
+roughly `2 × RTT`; at ~100 ms that is ~200 ms, inside the 500 ms budget, but
+you should confirm with the benchmark script before relying on it.
+
+### Indexes
+
+Added for the new query shape, each because a specific predicate uses it:
+
+| Index | Why |
+|---|---|
+| `(org_id, hierarchy_level_id)` | the BFS arm of the pool CTE filters on both |
+| `(org_id, zone)` | the Zone 2 arm filters on both |
+| `valid_until WHERE NOT NULL` | check 4; partial because the column is mostly NULL |
+| `hierarchy_levels(org_id, department)` | entry-point resolution |
+| `users(org_id)` | on the hot path twice |
+
+The pre-existing GIN index on `compliance_tags` is retained: check 2 uses
+array membership on PostgreSQL, which is what GIN accelerates. Not added:
+`users(department)` (7 rows — the index would cost more than the scan) and
+anything on `title` (never filtered).
+
+### Why the checks are still sequential
+
+The assessment requires check *N* to receive the output of check *N−1*. That
+is preserved literally: each check is a CTE reading the previous CTE. Running
+them as five independent filters over the original set would give the same
+final answer on this dataset but would attribute exclusions to the wrong rule
+in the audit trail, and would have every check evaluate rows an earlier check
+had already condemned. `test_single_query_parity.py` asserts the chaining is
+present in the generated SQL.
 
 - Permissions compile **once** per run into a dict — no per-node query, no N+1.
 - BFS walks the hierarchy DAG (tens of tiers), not the knowledge nodes, so a

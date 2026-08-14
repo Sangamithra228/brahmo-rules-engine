@@ -96,6 +96,24 @@ class SupabaseRepository(Repository):
             f"SELECT COUNT(*) c FROM knowledge_nodes WHERE {where}", params
         )[0]["c"]
 
+    def run_pipeline_single_query(self, org_id, candidate_level_ids,
+                                  zone2_enabled, predicates):
+        """The whole tail in one statement - one network round trip.
+
+        Against a hosted database this is the difference that matters: the
+        progressive form costs seven RTTs, this costs one. The five checks are
+        still five chained CTEs, so the order remains sequential and legible
+        in the generated SQL.
+        """
+        from backend.repository import pipeline_sql
+
+        sql, params = pipeline_sql.build(
+            org_id, candidate_level_ids, zone2_enabled, predicates,
+            placeholder="%s")
+        rows = self._rows(sql, params)
+        funnel, node_rows = pipeline_sql.split_rows(rows)
+        return {"funnel": funnel, "rows": [self._node(r) for r in node_rows]}
+
     def run_checks(self, org_id, candidate_level_ids, predicates,
                    fetch_rows_at_end=True, collect_ids_per_stage=False,
                    extra_node_ids=None) -> Dict[str, Any]:

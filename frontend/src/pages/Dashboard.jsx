@@ -37,7 +37,7 @@ export default function Dashboard() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    ;(async () => {
+    (async () => {
       try {
         const [h, u, hier] = await Promise.all([getHealth(), getUsers(), getHierarchy()])
         setHealth(h)
