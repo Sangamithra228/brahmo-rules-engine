@@ -257,7 +257,7 @@ class SQLiteRepository(Repository):
 
         sql, params = pipeline_sql.build(
             org_id, candidate_level_ids, zone2_enabled, predicates,
-            placeholder="?")
+            placeholder="?", dialect="sqlite")
         rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
         funnel, node_rows = pipeline_sql.split_rows(rows)
         return {"funnel": funnel, "rows": [self._node_from_dict(r) for r in node_rows]}

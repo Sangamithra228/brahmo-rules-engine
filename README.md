@@ -291,6 +291,27 @@ The DAG panel shows hierarchy *tiers*, not node identities, so it cannot
 become a side channel around this. There is a test asserting that no node id
 appears in the traversal payload.
 
+**Content is read only for nodes that survive all five checks (GAP 5).**
+The single statement chains the checks on *metadata* — id, org, tier, zone,
+status, tags, validity, derivability. `content` and `title` appear nowhere in
+the chain. They are joined on at the end, against the output of check 5:
+
+```sql
+c1_isolation AS (SELECT n.id, n.org_id, n.hierarchy_level, ... FROM knowledge_nodes n
+                 JOIN pool p ON p.id = n.id WHERE org_id = %s),
+c2_compliance AS (SELECT * FROM c1_isolation WHERE ...),
+...
+SELECT counts.*, node.*
+  FROM counts
+  LEFT JOIN (SELECT n.* FROM knowledge_nodes n
+             JOIN c5_derivability s ON s.id = n.id) AS node ON 1 = 1
+```
+
+So a node withheld by compliance or permission never has its payload read on
+that user's behalf, let alone shipped to Python. `test_single_query_parity.py`
+asserts `content` and `title` do not appear in the check chain and that the
+final join reads from `c5_derivability`.
+
 **Filtering happens in the database.** Checks 1–4 execute as progressive SQL
 `WHERE` clauses, so restricted rows are never read on the user's behalf and
 never cross the network (GAP 5). Only the final survivors have their content

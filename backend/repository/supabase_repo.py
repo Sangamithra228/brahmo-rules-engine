@@ -109,7 +109,7 @@ class SupabaseRepository(Repository):
 
         sql, params = pipeline_sql.build(
             org_id, candidate_level_ids, zone2_enabled, predicates,
-            placeholder="%s")
+            placeholder="%s", dialect="postgres")
         rows = self._rows(sql, params)
         funnel, node_rows = pipeline_sql.split_rows(rows)
         return {"funnel": funnel, "rows": [self._node(r) for r in node_rows]}

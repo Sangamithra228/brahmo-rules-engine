@@ -18,6 +18,25 @@ Predicate = Tuple[str, str, List[Any]]
 CHECK_CTE = ["c1_isolation", "c2_compliance", "c3_permission",
              "c4_temporal", "c5_derivability"]
 
+# The columns the five checks need to make their decisions. Deliberately NOT
+# `n.*`: `content` and `title` are the sensitive payload, and carrying them
+# through the chain would mean the database materialises the content of nodes
+# that checks 2-5 are about to discard. The chain moves metadata only; content
+# is joined back on at the very end, for survivors alone.
+FILTER_COLUMNS_COMMON = (
+    "id", "org_id", "hierarchy_level_id", "hierarchy_level", "zone", "status",
+    "department", "superseded_by", "valid_until", "derivability_score",
+)
+# Compliance reads a different column per dialect: SQLite has no array type,
+# so tags are denormalised into `required_tags`.
+FILTER_COLUMNS_SQLITE = FILTER_COLUMNS_COMMON + ("required_tags",)
+FILTER_COLUMNS_POSTGRES = FILTER_COLUMNS_COMMON + ("compliance_tags",)
+
+
+def filter_columns(dialect: str):
+    return (FILTER_COLUMNS_POSTGRES if dialect == "postgres"
+            else FILTER_COLUMNS_SQLITE)
+
 
 def build(
     org_id: str,
@@ -25,6 +44,7 @@ def build(
     zone2_enabled: bool,
     predicates: List[Predicate],
     placeholder: str = "?",
+    dialect: str = "sqlite",
 ) -> Tuple[str, List[Any]]:
     """Return (sql, params) for the whole tail.
 
@@ -76,7 +96,9 @@ def build(
         f"pool AS ({pool_sql})",
     ]
 
-    previous = ("SELECT n.* FROM knowledge_nodes n "
+    # Metadata only - see FILTER_COLUMNS_COMMON.
+    cols = ", ".join(f"n.{c}" for c in filter_columns(dialect))
+    previous = (f"SELECT {cols} FROM knowledge_nodes n "
                 "JOIN pool p ON p.id = n.id")
     for i, (_name, fragment, frag_params) in enumerate(predicates):
         source = previous if i == 0 else f"SELECT * FROM {CHECK_CTE[i - 1]}"
@@ -93,10 +115,15 @@ def build(
     )
     ctes.append(f"counts AS (SELECT {counts})")
 
+    # Content is read HERE and only here: joined to the survivors of check 5.
+    # A node excluded by any check never has its content touched.
+    survivors = ("SELECT n.* FROM knowledge_nodes n "
+                 f"JOIN {CHECK_CTE[-1]} s ON s.id = n.id")
+
     sql = (
         "WITH " + ",\n     ".join(ctes) + "\n"
         "SELECT counts.*, node.* FROM counts "
-        "LEFT JOIN (SELECT * FROM c5_derivability) AS node ON 1 = 1 "
+        f"LEFT JOIN ({survivors}) AS node ON 1 = 1 "
         "ORDER BY node.importance DESC, node.id"
     )
     return sql, params
