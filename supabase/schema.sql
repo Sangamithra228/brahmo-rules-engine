@@ -21,8 +21,12 @@ CREATE TABLE hierarchy_levels (
     department    TEXT,
     parent_ids    TEXT[] DEFAULT '{}',
     zone          INTEGER NOT NULL DEFAULT 1 CHECK (zone IN (1,2,3)),
-    created_at    TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(org_id, level_number, department)
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+    -- NOTE: there is deliberately NO UNIQUE(org_id, level_number, department).
+    -- A department legitimately owns several tiers at the same depth: the
+    -- supplied dataset puts Ortho General, the Ortho TKR Unit and the Post-TKR
+    -- Protocol Area all at level 8 under Orthopaedics. Such a constraint would
+    -- reject seed.sql outright. Identity is the primary key on `id`.
 );
 
 CREATE TABLE knowledge_nodes (

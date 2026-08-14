@@ -45,6 +45,13 @@ class Settings:
         os.environ.get("BRAHMO_DERIVABILITY_THRESHOLD", "0.7")
     )
     permission_mode = os.environ.get("BRAHMO_PERMISSION_MODE", "strict")
+    # Supabase project identity. SUPABASE_URL / SUPABASE_ANON_KEY describe the
+    # PostgREST endpoint; this backend does NOT use them to read data - see
+    # the note in SUPABASE_SETUP_HELP - but they are read here so the project
+    # reference can be derived and reported.
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
+    supabase_db_password = os.environ.get("SUPABASE_DB_PASSWORD", "")
     supabase_db_url = os.environ.get("SUPABASE_DB_URL", "")
     sqlite_path = os.environ.get("SQLITE_PATH") or None
 
@@ -64,23 +71,57 @@ class Settings:
     ]
 
 
+def project_ref(url: str) -> str:
+    """https://abc123.supabase.co -> abc123"""
+    if not url:
+        return ""
+    host = url.split("//")[-1].split("/")[0]
+    return host.split(".")[0]
+
+
+def resolve_db_url(cfg) -> str:
+    """The connection string psycopg needs.
+
+    SUPABASE_DB_URL wins if set. Otherwise it is built from the project
+    reference in SUPABASE_URL plus SUPABASE_DB_PASSWORD, so the common case
+    needs one secret rather than a hand-assembled DSN.
+    """
+    if cfg.supabase_db_url:
+        return cfg.supabase_db_url
+    ref = project_ref(cfg.supabase_url)
+    if ref and cfg.supabase_db_password:
+        from urllib.parse import quote
+        pwd = quote(cfg.supabase_db_password, safe="")
+        return f"postgresql://postgres:{pwd}@db.{ref}.supabase.co:5432/postgres"
+    return ""
+
+
 settings = Settings()
 
 
 SUPABASE_SETUP_HELP = """
-Supabase is the primary database and is not configured.
+Supabase is the primary database and is not fully configured.
 
-To use Supabase (recommended, and what the assessment specifies):
+This backend reads the graph over a direct PostgreSQL connection (psycopg),
+because the five checks execute as progressive SQL WHERE clauses inside the
+database. A publishable / anon key addresses the PostgREST API and cannot
+drive those predicates, so SUPABASE_URL and SUPABASE_ANON_KEY alone are not
+enough: a database credential is required.
 
-  1. Create a project at supabase.com
-  2. SQL Editor -> run, in order:
+  1. SQL Editor -> run, in order:
        supabase/schema.sql
        supabase/seed.sql
        supabase/rls_policies.sql   (optional, defence in depth)
-  3. cp .env.example .env
-  4. Set SUPABASE_DB_URL in .env to your connection string
-       Project Settings -> Database -> Connection string -> URI
-  5. pip install "psycopg[binary]"
+  2. cp .env.example .env   (Windows: copy .env.example .env)
+  3. Supply ONE of:
+       SUPABASE_DB_PASSWORD  - your database password; the connection string
+                               is then derived from SUPABASE_URL
+       SUPABASE_DB_URL       - the full URI, from
+                               Project Settings -> Database -> Connection string
+     Use SUPABASE_DB_URL with the Session pooler URI if your network is
+     IPv6-restricted and db.<ref>.supabase.co does not resolve.
+  4. pip install "psycopg[binary]"
+  5. Verify:  python scripts/verify_supabase.py
 
 To run offline against the local SQLite fallback instead:
 
@@ -112,9 +153,11 @@ def get_repository(backend: str = None, auto_seed_sqlite: bool = True):
         return repo
 
     if backend == "supabase":
-        if not settings.supabase_db_url:
+        dsn = resolve_db_url(settings)
+        if not dsn:
             raise DatabaseNotConfigured(
-                "SUPABASE_DB_URL is not set." + SUPABASE_SETUP_HELP
+                "No database credential found: set SUPABASE_DB_PASSWORD "
+                "(with SUPABASE_URL) or SUPABASE_DB_URL." + SUPABASE_SETUP_HELP
             )
         try:
             import psycopg  # noqa: F401
@@ -126,7 +169,7 @@ def get_repository(backend: str = None, auto_seed_sqlite: bool = True):
 
         from backend.repository.supabase_repo import SupabaseRepository
 
-        return SupabaseRepository(settings.supabase_db_url)
+        return SupabaseRepository(dsn)
 
     raise DatabaseNotConfigured(
         f"DATABASE_BACKEND='{backend}' is not recognised. "

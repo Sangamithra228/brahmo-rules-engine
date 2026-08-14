@@ -25,17 +25,19 @@ class TestDatabaseConfiguration(unittest.TestCase):
     def test_supabase_without_credentials_fails_loudly(self):
         """It must not quietly fall back to SQLite - a demo run against the
         wrong database is worse than one that refuses to start."""
-        saved = settings.supabase_db_url
+        saved = (settings.supabase_db_url, settings.supabase_db_password)
         settings.supabase_db_url = ""
+        settings.supabase_db_password = ""
         try:
             with self.assertRaises(DatabaseNotConfigured) as ctx:
                 get_repository("supabase")
             msg = str(ctx.exception)
             self.assertIn("SUPABASE_DB_URL", msg)
+            self.assertIn("SUPABASE_DB_PASSWORD", msg)
             self.assertIn("DATABASE_BACKEND=sqlite", msg,
                           "the error should tell the reader how to run offline")
         finally:
-            settings.supabase_db_url = saved
+            settings.supabase_db_url, settings.supabase_db_password = saved
 
     def test_sqlite_fallback_requires_an_explicit_opt_in(self):
         repo = get_repository("sqlite")
@@ -293,3 +295,75 @@ class TestRuleOverridesAreNotCallerControllable(unittest.TestCase):
         self.assertNotIn("threshold:", model)
         self.assertNotIn("mode:", model)
         self.assertIn("zone2:", model)
+
+
+class TestSupabaseConnectionResolution(unittest.TestCase):
+    """The DSN psycopg needs, derived without hardcoding anything."""
+
+    class Cfg:
+        supabase_url = ""
+        supabase_db_password = ""
+        supabase_db_url = ""
+
+    def cfg(self, **kw):
+        c = self.Cfg()
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return c
+
+    def test_project_ref_is_parsed_from_the_project_url(self):
+        from backend.config import project_ref
+        self.assertEqual(
+            project_ref("https://abc123xyz.supabase.co"), "abc123xyz")
+        self.assertEqual(
+            project_ref("https://abc123xyz.supabase.co/"), "abc123xyz")
+        self.assertEqual(project_ref(""), "")
+
+    def test_dsn_is_derived_from_url_plus_password(self):
+        from backend.config import resolve_db_url
+        dsn = resolve_db_url(
+            self.cfg(supabase_url="https://abc.supabase.co",
+                     supabase_db_password="hunter2"))
+        self.assertEqual(
+            dsn, "postgresql://postgres:hunter2@db.abc.supabase.co:5432/postgres")
+
+    def test_password_special_characters_are_url_encoded(self):
+        """An unencoded '@' or '/' in a password silently corrupts the DSN."""
+        from backend.config import resolve_db_url
+        dsn = resolve_db_url(
+            self.cfg(supabase_url="https://abc.supabase.co",
+                     supabase_db_password="p@ss/w:rd"))
+        self.assertIn("p%40ss%2Fw%3Ard", dsn)
+        self.assertEqual(dsn.count("@"), 1, "host separator must stay unique")
+
+    def test_explicit_db_url_takes_precedence(self):
+        """Needed for the Session pooler URI on IPv6-restricted networks."""
+        from backend.config import resolve_db_url
+        explicit = "postgresql://postgres.abc:pw@aws-0-x.pooler.supabase.com:6543/postgres"
+        self.assertEqual(
+            resolve_db_url(self.cfg(supabase_url="https://abc.supabase.co",
+                                    supabase_db_password="ignored",
+                                    supabase_db_url=explicit)),
+            explicit)
+
+    def test_no_credential_yields_no_dsn(self):
+        from backend.config import resolve_db_url
+        self.assertEqual(
+            resolve_db_url(self.cfg(supabase_url="https://abc.supabase.co")), "")
+
+    def test_anon_key_is_not_used_to_build_the_connection(self):
+        """The publishable key addresses PostgREST; it must never end up in a
+        psycopg connection string."""
+        from backend.config import resolve_db_url
+        dsn = resolve_db_url(
+            self.cfg(supabase_url="https://abc.supabase.co",
+                     supabase_db_password="pw"))
+        self.assertNotIn("sb_publishable", dsn)
+        self.assertNotIn("anon", dsn)
+
+    def test_no_real_credential_is_committed_to_source(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[2]
+        for name in ["README.md", ".env.example", "backend/config.py"]:
+            text = (root / name).read_text()
+            self.assertNotIn("sb_publishable_", text, name)

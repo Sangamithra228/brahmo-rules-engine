@@ -221,3 +221,61 @@ class TestAdminEndpointGate(unittest.TestCase):
         from backend import api
         r = api.run_pipeline(repo, eng, {"user": "U-PRIYA"})
         self.assertGreater(len(r["candidate_set"]), 0)
+
+
+class TestSuppliedSeedLoadsUnderTheSchema(unittest.TestCase):
+    """Guards against schema constraints that the supplied dataset violates.
+
+    The PostgreSQL schema previously carried
+    UNIQUE(org_id, level_number, department), which rejects the assessment's
+    own seed: Orthopaedics owns three tiers at level 8. It would have failed
+    in the Supabase SQL Editor rather than in any test.
+    """
+
+    def test_schema_has_no_constraint_the_seed_violates(self):
+        import pathlib
+        from collections import Counter
+
+        from backend.data.seed_data import HIERARCHY_LEVELS
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        raw = (root / "supabase" / "schema.sql").read_text()
+        # Strip SQL comments: the file explains why the constraint is absent,
+        # and the explanation must not count as the constraint.
+        schema = "\n".join(
+            line.split("--")[0] for line in raw.split("\n")
+        )
+        self.assertNotIn("UNIQUE(org_id, level_number, department)", schema)
+
+        collisions = Counter(
+            (num, dept) for (_i, num, _nm, dept, _p, _z) in HIERARCHY_LEVELS
+            if dept is not None
+        )
+        self.assertTrue(
+            any(v > 1 for v in collisions.values()),
+            "if the dataset no longer collides, this guard is obsolete",
+        )
+
+    def test_every_hierarchy_id_is_unique(self):
+        from backend.data.seed_data import HIERARCHY_LEVELS
+        ids = [h[0] for h in HIERARCHY_LEVELS]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_generated_seed_sql_matches_the_canonical_data(self):
+        """seed.sql is generated; it must not drift from seed_data.py."""
+        import pathlib
+        from backend.data.seed_data import (
+            EDGES, HIERARCHY_LEVELS, KNOWLEDGE_NODES, USERS,
+        )
+        root = pathlib.Path(__file__).resolve().parents[2]
+        sql = (root / "supabase" / "seed.sql").read_text()
+        for node in KNOWLEDGE_NODES:
+            self.assertIn(f"'{node[0]}'", sql, f"{node[0]} missing from seed.sql")
+        for user in USERS:
+            self.assertIn(f"'{user[0]}'", sql)
+        for level in HIERARCHY_LEVELS:
+            self.assertIn(f"'{level[0]}'", sql)
+        self.assertEqual(len(KNOWLEDGE_NODES), 50)
+        self.assertEqual(len(USERS), 7)
+        self.assertEqual(len(HIERARCHY_LEVELS), 20)
+        self.assertEqual(len(EDGES), 10)

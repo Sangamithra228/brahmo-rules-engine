@@ -78,40 +78,76 @@ environment — see *Verification status*.
 
 ## Setup
 
-### 1. Supabase (the primary database)
+### 1. Load the schema and seed into Supabase
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. SQL Editor → run in order:
-   - `supabase/schema.sql` — tables, indexes, cycle-rejection trigger
-   - `supabase/seed.sql` — 50 nodes, 7 users, 20 tiers, 10 edges
-   - `supabase/rls_policies.sql` — optional, checks 1–4 as Row-Level Security
-3. Verify:
-   ```sql
-   SELECT COUNT(*) FROM knowledge_nodes;   -- 50
-   SELECT COUNT(*) FROM users;             -- 7
-   SELECT COUNT(*) FROM hierarchy_levels;  -- 20
-   ```
-4. Copy the connection string: Project Settings → Database → Connection
-   string → URI.
+In the Supabase **SQL Editor**, run these three files **in this order**:
+
+1. `supabase/schema.sql` — tables, indexes, triggers
+2. `supabase/seed.sql` — 50 nodes, 7 users, 20 tiers, 10 edges
+3. `supabase/rls_policies.sql` — optional, checks 1–4 as Row-Level Security
+
+Then confirm the supplied dataset loaded:
+
+```sql
+SELECT COUNT(*) FROM knowledge_nodes;   -- 50
+SELECT COUNT(*) FROM users;             -- 7
+SELECT COUNT(*) FROM hierarchy_levels;  -- 20
+SELECT COUNT(*) FROM edges;             -- 10
+```
+
+Nothing about the dataset is hardcoded in Python at runtime: the application
+reads users, tiers and nodes from whichever database is configured.
+`backend/data/seed_data.py` exists only to generate `seed.sql` and to build
+the local SQLite fallback.
 
 ### 2. Environment
 
 ```bash
-cp .env.example .env
+cp .env.example .env      # Windows: copy .env.example .env
 ```
 
-Set `SUPABASE_DB_URL` in `.env`. `DATABASE_BACKEND` defaults to `supabase`.
+**How this backend connects.** The five checks execute as progressive SQL
+`WHERE` clauses *inside* the database, so the application needs a direct
+PostgreSQL connection (psycopg). A publishable / anon key addresses the
+PostgREST API and cannot drive those predicates, so the key alone is not
+sufficient — a database credential is required as well. The anon key is
+recorded in configuration but is **not** used to read data, and it is never
+sent to the browser.
+
+Supply **one** of:
+
+- `SUPABASE_DB_PASSWORD` — your database password. The connection string is
+  derived from `SUPABASE_URL` automatically. *(simplest)*
+- `SUPABASE_DB_URL` — the full URI from Project Settings → Database →
+  Connection string. Use the **Session pooler** URI if your network cannot
+  resolve `db.<ref>.supabase.co`.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_BACKEND` | `supabase` | `supabase` or `sqlite` |
-| `SUPABASE_DB_URL` | — | PostgreSQL connection string |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` | — | Supabase project API |
+| `SUPABASE_URL` | — | `https://<ref>.supabase.co` |
+| `SUPABASE_ANON_KEY` | — | Publishable/anon key. Recorded, not used to read data |
+| `SUPABASE_DB_PASSWORD` | — | Database password; DSN derived from `SUPABASE_URL` |
+| `SUPABASE_DB_URL` | — | Full connection URI. Overrides the derived one |
 | `BRAHMO_ORG_ID` | `supra` | Tenant |
-| `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff (configuration only; the dashboard displays it read-only) |
+| `BRAHMO_DERIVABILITY_THRESHOLD` | `0.7` | Check 5 cutoff (dashboard shows it read-only) |
 | `BRAHMO_PERMISSION_MODE` | `strict` | Internal; the dashboard exposes no selector |
 | `BRAHMO_ADMIN_TOKEN` | _unset_ | When set, `/admin` requires an `X-Admin-Token` header. Unset = loopback only |
 | `BRAHMO_CORS_ORIGINS` | localhost:5173, localhost:8000 | Comma-separated allowed origins |
+
+A **service-role key is not used by this project** and must never be
+committed or exposed to the browser.
+
+### 2a. Verify the connection
+
+```bash
+pip install "psycopg[binary]"
+python scripts/verify_supabase.py
+```
+
+This connects through the same repository the application uses, checks the
+row counts above, and runs one real pipeline per user. It prints no
+credentials.
 
 `.env` is gitignored. No credentials are committed anywhere in this repo.
 
@@ -169,7 +205,8 @@ taken on trust:
 | Pipeline behaviour, silent exclusion, timing | Verified live over HTTP |
 | Frontend build (`npm run build`) | **Not executed.** Verify in your environment |
 | Frontend lint (`npm run lint`) | **Not executed.** Verify in your environment |
-| Supabase connection | **Not executed.** Requires your environment credentials |
+| Supabase connection | **Not executed.** Requires your database credential — run `python scripts/verify_supabase.py` |
+| `schema.sql` / `seed.sql` / `rls_policies.sql` | **Not executed.** Run them in the Supabase SQL Editor, in that order |
 | RLS policies | Written and reviewed; not executed against a live instance |
 
 Every runtime figure in this README came from the SQLite fallback. Supabase
