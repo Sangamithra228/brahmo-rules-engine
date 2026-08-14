@@ -22,7 +22,7 @@ EXPECTED = {"knowledge nodes": 50, "users": 7, "hierarchy tiers": 20}
 
 
 def mask(dsn: str) -> str:
-    """postgresql://user:secret@host/db -> postgresql://user:***@host/db
+    """Redact the password from a DSN before printing it.
 
     The password is never printed. Split on the LAST '@' so a password
     containing an unencoded '@' cannot expose part of itself.

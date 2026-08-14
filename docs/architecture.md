@@ -252,13 +252,59 @@ The alternative is fetching all 50 nodes into Python and filtering there.
 That fails: restricted content has already crossed the network boundary, and
 discarding it afterwards is politeness rather than access control.
 
-`Repository.run_checks` ANDs the predicates progressively. Stage *k* runs with
-predicates 1..*k*, so the row set entering check *k+1* is literally the row set
-that survived check *k* — sequential by construction — and every stage is
-evaluated by the database. Only the final survivors have their content read.
+**The shipped implementation is a single statement.**
+`backend/repository/pipeline_sql.py` builds it, and every check is its own CTE
+reading the previous one:
 
-Funnel counts come from `COUNT(*)` per stage, so the numbers on screen are the
-database's own count, not Python's bookkeeping.
+```
+bfs            -> node ids on tiers BFS reached
+pool           -> bfs UNION zone2        (UNION dedupes)
+c1_isolation   -> SELECT n.id, n.org_id, n.hierarchy_level, ...  (METADATA ONLY)
+                    FROM knowledge_nodes n JOIN pool p ON p.id = n.id
+                    WHERE org_id = %s
+c2_compliance  -> SELECT * FROM c1_isolation   WHERE ...
+c3_permission  -> SELECT * FROM c2_compliance  WHERE ...
+c4_temporal    -> SELECT * FROM c3_permission  WHERE ...
+c5_derivability-> SELECT * FROM c4_temporal    WHERE derivability_score < %s
+counts         -> COUNT(*) over each CTE above
+final          -> counts LEFT JOIN (knowledge_nodes JOIN c5_derivability)
+```
+
+Two properties matter here.
+
+**Sequence.** Check *k+1* selects `FROM` check *k*'s CTE. The order is not an
+implementation detail buried in Python — it is visible in the SQL, and
+`test_single_query_parity.py` asserts the chaining is present.
+
+**Content is read last.** `c1_isolation` deliberately does *not* select `n.*`.
+It lists only the columns the checks need to decide: id, org, tier, zone,
+status, department, `superseded_by`, `valid_until`, `derivability_score` and
+the tags column. `content` and `title` appear nowhere in the chain. They are
+joined on at the end, against the survivors of check 5. A node withheld by
+compliance or permission therefore never has its payload read on that user's
+behalf — not fetched into Python, and not even materialised by the database in
+an intermediate result.
+
+An earlier revision opened with `SELECT n.* FROM knowledge_nodes n JOIN pool`,
+which carried content through all five checks inside the database. Nothing
+leaked, but it asked Postgres to move the payload of rows it was about to
+discard, and the requirement is that permission is enforced *before* restricted
+content is retrieved. Narrowing the chain to metadata fixed that and changed no
+result.
+
+Funnel counts come from `COUNT(*)` over those same CTEs, so the numbers on
+screen are the database's own count, not Python's bookkeeping — and they cost
+no extra round trip.
+
+**Cost.** The progressive form (`Repository.run_checks`, still used by the
+audit path because it needs per-stage id lists) makes seven round trips. Over
+a hosted database each is a network RTT, which measured 900–1600 ms from
+India against `ap-southeast-1`. The single statement makes one. Whole-pipeline
+round trips went 11 → 2, and the owner measured 411 ms slowest median against
+Supabase afterwards.
+
+Keeping the progressive form is deliberate: it is the reference implementation
+the optimized path is tested against, user by user, with Zone 2 on and off.
 
 `supabase/rls_policies.sql` pushes checks 1–4 into Row-Level Security as
 defence in depth. That is the answer to "what if someone bypasses the API and

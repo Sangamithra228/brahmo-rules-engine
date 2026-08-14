@@ -68,7 +68,7 @@ itself, is in [`docs/architecture.md`](docs/architecture.md).
 | Database | Supabase / PostgreSQL (**primary**), SQLite (offline fallback) |
 | Backend | Python 3.11+, FastAPI |
 | Frontend | React 18, Vite, Tailwind CSS |
-| Tests | `unittest`, 133 tests, standard library only |
+| Tests | `unittest`, 155 tests, standard library only |
 
 The React frontend is real (Vite + React 18 + Tailwind, source in
 `frontend/src`). The build and lint should be verified in your deployment
@@ -210,13 +210,13 @@ taken on trust:
 
 | Item | Status |
 |---|---|
-| Backend test suite | **133 passing**, run against the SQLite fallback |
+| Backend test suite | **155 passing** — run locally against the SQLite fallback |
 | Pipeline behaviour, silent exclusion, timing | Verified live over HTTP |
 | Frontend lint (`npm run lint`) | **Passing** — ESLint clean, 0 problems |
 | Frontend JSX/ESM parse | **Passing** — all 10 modules parse |
 | Frontend build (`npm run build`) | **Not executed** — the vendored `node_modules` carries the Windows rollup binary, not the Linux one. Run it on your machine |
 | Supabase connection | **Not executed.** No network here — run `python scripts/verify_supabase.py` |
-| Supabase timing | **Not measured.** Run `python scripts/benchmark_pipeline.py` |
+| Supabase timing | **Measured by the project owner: 411 ms slowest median, within budget.** Not re-measurable here (no network) |
 | `schema.sql` / `seed.sql` / `rls_policies.sql` | **Not executed.** Run them in the Supabase SQL Editor, in that order |
 | RLS policies | Written and reviewed; not executed against a live instance |
 
@@ -229,7 +229,7 @@ timing will be higher because of network round trips.
 python -m unittest discover -s backend/tests -t .
 ```
 
-133 tests, no dependencies. They run against the SQLite fallback, so the
+155 tests, no dependencies. They run against the SQLite fallback, so the
 PostgreSQL dialect is verified by asserting on the SQL the builder emits
 rather than by executing it. Coverage:
 
