@@ -9,9 +9,9 @@ Permission Compiler
  ↓
 Entry Point Resolver
  ↓
-BFS
+Upward BFS
  ↓
-Zone 2
+Zone 2 / GLOBAL Injection
  ↓
 Isolation
  ↓
@@ -26,6 +26,28 @@ Derivability
 Candidate Set
 ```
 
+### BFS properties
+
+- **Starts** at the entry point resolved from the user's department, ceiling
+  and organization — never a fixed tier.
+- **Direction:** upward only, following `parent_ids` toward the root. No
+  downward or sideways traversal.
+- **FIFO queue** (`collections.deque`, `popleft`), so the first time a tier is
+  dequeued is via a shortest path.
+- **Visited set** prevents a tier being processed twice.
+- **Multi-parent supported:** a tier with several parents is enqueued from
+  each path and processed once, at its shortest distance. Convergences are
+  recorded on `TraversalResult.multi_parent_hits`.
+- **Cycle protection:** the visited set guarantees termination even on a
+  cyclic graph. `detect_cycles()` is the separate load-time guard and
+  `would_create_cycle()` the write-time one; `supabase/schema.sql` carries the
+  same guard as a trigger.
+- **`distance_from_entry`** is computed during traversal and drives
+  `compression_hint` in the candidate assembler.
+- **Reads tiers only.** Knowledge-node content is never fetched during
+  traversal; BFS yields reachable tier ids and distances, and the five checks
+  then run as SQL over that set.
+
 In more detail:
 
 ```
@@ -35,8 +57,9 @@ User row
    │                              compiled ONCE per session
    ├─ 2. Entry Point Resolver ─── department + ceiling → the DAG tier to start from
    │
-   ├─ 3. BFS Traversal ────────── up the parent edges, plus a department-scoped
-   │                              walk down; visited set; shortest distances
+   ├─ 3. BFS Traversal ────────── UPWARD only, following parent_ids to the
+   │                              root; FIFO queue + visited set; shortest
+   │                              distances; multi-parent safe
    ├─ 4. Zone 2 Injection ─────── global safety nodes added to the candidate pool
    │                              (after BFS, before the checks)
    │
@@ -101,11 +124,13 @@ reach is 15 nodes, not the "~20" the setup guide predicts, and her final set
 is 11 rather than the "~15" it predicts. Vikram lands on 13 against a stated
 "~22".
 
-An earlier revision added a department-scoped downward walk, which reproduced
-the guide's numbers closely (Priya 20 reachable, Vikram exactly 22). That was
-removed because the specification's prose is explicit that BFS walks up, and
-the prose governs. The arithmetic gap between the two readings is documented
-here rather than hidden.
+*Historical note, not current behaviour:* an earlier revision of this project
+also walked downward within the user's own department, which reproduced the
+guide's figures closely (Priya 20 reachable, Vikram exactly 22). It was
+removed. The specification's prose is explicit that BFS walks up, and the
+prose governs. **The shipped implementation performs no downward traversal of
+any kind.** The arithmetic gap between the two readings is recorded here
+rather than hidden.
 
 ## Decision 2 — multi-parent tiers converge, they do not duplicate
 

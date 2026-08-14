@@ -61,12 +61,13 @@ def options_from(params: Dict[str, Any]) -> EngineOptions:
             return v.lower() not in ("false", "0", "no")
         return bool(v)
 
+    # Only zone2 is caller-controllable. The threshold and permission mode
+    # come from organization configuration and are ignored if a caller sends
+    # them, so no request can relax a core filtering rule.
     return EngineOptions(
         zone2_enabled=flag("zone2", True),
-        derivability_threshold=float(
-            params.get("threshold") or settings.derivability_threshold
-        ),
-        permission_mode=params.get("mode") or settings.permission_mode,
+        derivability_threshold=settings.derivability_threshold,
+        permission_mode=settings.permission_mode,
         include_audit=False,
     )
 

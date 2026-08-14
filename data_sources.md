@@ -1,5 +1,23 @@
 # Data Sources
 
+## Assessment Knowledge Dataset
+
+The knowledge-node dataset used by this implementation is the dataset supplied
+as part of the Astroum BRAHMO technical assessment
+(`ASSESSMENT_01_SETUP_GUIDE.md`). It is used to demonstrate:
+
+- knowledge-node filtering
+- hierarchy traversal
+- compliance filtering
+- permission filtering
+- temporal filtering
+- derivability filtering
+- candidate-set generation
+
+No external clinical source was consulted, and **no external clinical
+validation was performed**. Nothing in this repository should be read as
+clinical guidance.
+
 ## Summary
 
 Every row in this project comes from the assessment's own Setup Guide. Nothing

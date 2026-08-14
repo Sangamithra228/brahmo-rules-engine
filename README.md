@@ -68,11 +68,11 @@ itself, is in [`docs/architecture.md`](docs/architecture.md).
 | Database | Supabase / PostgreSQL (**primary**), SQLite (offline fallback) |
 | Backend | Python 3.11+, FastAPI |
 | Frontend | React 18, Vite, Tailwind CSS |
-| Tests | `unittest`, 128 tests, standard library only |
+| Tests | `unittest`, 133 tests, standard library only |
 
 The React frontend is real (Vite + React 18 + Tailwind, source in
-`frontend/src`). It has **not been built or linted in this environment** — see
-*Known tradeoffs* before the demo.
+`frontend/src`). The build and lint should be verified in your deployment
+environment — see *Verification status*.
 
 ---
 
@@ -158,13 +158,30 @@ instructions rather than silently using the wrong database.
 
 ---
 
+## Verification status
+
+Being explicit about what was actually executed, so nothing here has to be
+taken on trust:
+
+| Item | Status |
+|---|---|
+| Backend test suite | **133 passing**, run against the SQLite fallback |
+| Pipeline behaviour, silent exclusion, timing | Verified live over HTTP |
+| Frontend build (`npm run build`) | **Not executed.** Verify in your environment |
+| Frontend lint (`npm run lint`) | **Not executed.** Verify in your environment |
+| Supabase connection | **Not executed.** Requires your environment credentials |
+| RLS policies | Written and reviewed; not executed against a live instance |
+
+Every runtime figure in this README came from the SQLite fallback. Supabase
+timing will be higher because of network round trips.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s backend/tests -t .
 ```
 
-128 tests, no dependencies. They run against the SQLite fallback, so the
+133 tests, no dependencies. They run against the SQLite fallback, so the
 PostgreSQL dialect is verified by asserting on the SQL the builder emits
 rather than by executing it. Coverage:
 
@@ -205,6 +222,11 @@ rather than by executing it. Coverage:
 { "role": "AUDITOR", "department": "audit", "ceiling": 3,
   "clearance": ["MNPI"], "name": "External Auditor" }
 ```
+
+`zone2` is the only caller-controllable option. The derivability threshold and
+permission mode are organization configuration and are ignored if sent, so no
+request can relax a core filtering rule; the effective values are echoed under
+`options` for read-only display.
 
 ---
 
@@ -307,14 +329,7 @@ unknown roles fall through to a policy that grants nothing.
   and so are unreachable by an upward walk. The prose ("walks UP the DAG")
   and the numbers disagree; the prose was followed. See Decision 1.
 
-- **The frontend has not been built.** `npm install` and `npm run build` have
-  not been run against this source, and neither has ESLint. The module graph,
-  imports and JSX nesting were checked statically. Run `npm install && npm run
-  build` before relying on it.
-- **Supabase has not been connected.** The schema, seed and RLS SQL are
-  written and the PostgreSQL dialect is unit-tested, but no run has been made
-  against a live Supabase instance. Every runtime figure quoted in this README
-  came from the SQLite fallback.
+- See *Verification status* for what has and has not been executed.
 
 - **Per-check timings are apportioned, not individually measured.** The five
   checks run as five progressive SQL statements; timing each separately would

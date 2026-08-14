@@ -67,10 +67,17 @@ async def _unhandled(_request, exc: Exception):
 
 
 class PipelineRequest(BaseModel):
+    """Zone 2 is the only demo-controllable option.
+
+    The derivability threshold and the permission mode are organization
+    configuration (BRAHMO_DERIVABILITY_THRESHOLD, BRAHMO_PERMISSION_MODE) and
+    are deliberately NOT accepted per request: a caller must not be able to
+    relax a core filtering rule over HTTP. The effective values are echoed
+    back under `options` so the dashboard can display them read-only.
+    """
+
     user: Optional[str] = None
     zone2: bool = True
-    threshold: Optional[float] = None
-    mode: Optional[str] = None
     # An unseen profile can be supplied inline instead of a user id.
     role: Optional[str] = None
     department: Optional[str] = None
@@ -109,16 +116,10 @@ def pipeline_run(body: PipelineRequest):
 
 @app.get("/pipeline/compare")
 def pipeline_compare(
-    users: str = "U-PRIYA,U-VIKRAM,U-SURESH",
-    zone2: bool = True,
-    threshold: Optional[float] = None,
-    mode: Optional[str] = None,
+    users: str = "U-PRIYA,U-VIKRAM,U-SURESH", zone2: bool = True
 ):
     ids = [u.strip() for u in users.split(",") if u.strip()]
-    return api.compare(
-        repo, engine, ids,
-        {"zone2": zone2, "threshold": threshold, "mode": mode},
-    )
+    return api.compare(repo, engine, ids, {"zone2": zone2})
 
 
 @app.get("/pipeline/{run_id}")

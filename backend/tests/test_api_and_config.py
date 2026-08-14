@@ -243,3 +243,53 @@ class TestErrorHandling(unittest.TestCase):
         with self.assertRaises(api.ApiError) as ctx:
             api.get_run("does-not-exist")
         self.assertEqual(ctx.exception.status, 404)
+
+
+class TestRuleOverridesAreNotCallerControllable(unittest.TestCase):
+    """A request must not be able to relax a core filtering rule.
+
+    The threshold and permission mode are organization configuration. Zone 2
+    stays controllable because the assessment demo requires the toggle.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo, cls.eng = engine()
+
+    def test_threshold_sent_over_the_wire_is_ignored(self):
+        from backend.config import settings
+        loose = api.run_pipeline(
+            self.repo, self.eng, {"user": "U-PRIYA", "threshold": 0.99})
+        self.assertEqual(loose["options"]["derivability_threshold"],
+                         settings.derivability_threshold)
+        baseline = api.run_pipeline(self.repo, self.eng, {"user": "U-PRIYA"})
+        self.assertEqual(len(loose["candidate_set"]),
+                         len(baseline["candidate_set"]),
+                         "a caller-supplied threshold changed the result")
+
+    def test_permission_mode_sent_over_the_wire_is_ignored(self):
+        from backend.config import settings
+        r = api.run_pipeline(
+            self.repo, self.eng, {"user": "U-PRIYA", "mode": "scope_aware"})
+        self.assertEqual(r["options"]["permission_mode"],
+                         settings.permission_mode)
+
+    def test_zone2_remains_controllable_for_the_demo(self):
+        on = api.run_pipeline(self.repo, self.eng, {"user": "U-PRIYA"})
+        off = api.run_pipeline(
+            self.repo, self.eng, {"user": "U-PRIYA", "zone2": False})
+        self.assertGreater(len(on["candidate_set"]), len(off["candidate_set"]))
+
+    def test_configured_values_are_echoed_for_read_only_display(self):
+        r = api.run_pipeline(self.repo, self.eng, {"user": "U-VIKRAM"})
+        self.assertIn("derivability_threshold", r["options"])
+        self.assertIn("permission_mode", r["options"])
+
+    def test_http_request_model_does_not_accept_rule_overrides(self):
+        """Read the model from disk so this holds without FastAPI installed."""
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parents[1] / "main.py").read_text()
+        model = src.split("class PipelineRequest")[1].split("# ----")[0]
+        self.assertNotIn("threshold:", model)
+        self.assertNotIn("mode:", model)
+        self.assertIn("zone2:", model)
